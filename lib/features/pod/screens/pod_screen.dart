@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/widgets/beacon_ring.dart';
+
+import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/beacon_ring.dart';
 
 /// Pod screen — shows current safety pod status, members, and check-in button.
 /// Matches the JSX PodScreen component.
@@ -87,13 +88,21 @@ class PodScreen extends StatelessWidget {
                   child: Column(
                     children: const [
                       _PodMemberTile(
-                          initials: 'RS', status: _MemberStatus.reached),
+                        initials: 'RS',
+                        status: _MemberStatus.reached,
+                      ),
                       _PodMemberTile(
-                          initials: 'MK', status: _MemberStatus.reached),
+                        initials: 'MK',
+                        status: _MemberStatus.reached,
+                      ),
                       _PodMemberTile(
-                          initials: 'PJ', status: _MemberStatus.reached),
+                        initials: 'PJ',
+                        status: _MemberStatus.reached,
+                      ),
                       _PodMemberTile(
-                          initials: 'TN', status: _MemberStatus.live),
+                        initials: 'TN',
+                        status: _MemberStatus.live,
+                      ),
                     ],
                   ),
                 ),
@@ -164,9 +173,7 @@ class _PodMemberTile extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.border, width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
       ),
       child: Row(
         children: [
@@ -223,10 +230,7 @@ class _PodMemberTile extends StatelessWidget {
           else
             Text(
               'live',
-              style: AppTextStyles.mono(
-                fontSize: 10,
-                color: AppColors.amber,
-              ),
+              style: AppTextStyles.mono(fontSize: 10, color: AppColors.amber),
             ),
         ],
       ),

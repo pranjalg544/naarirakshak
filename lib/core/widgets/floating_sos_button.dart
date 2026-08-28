@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../theme/app_theme.dart';
 
 /// Floating SOS button with pulsing coral ring — always visible on main screens.
@@ -25,12 +26,14 @@ class _FloatingSosButtonState extends State<FloatingSosButton>
       duration: const Duration(milliseconds: 2200),
     )..repeat();
 
-    _scaleAnimation = Tween<double>(begin: 0.75, end: 1.9).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeOut),
-    );
-    _opacityAnimation = Tween<double>(begin: 0.55, end: 0.0).animate(
-      CurvedAnimation(parent: _pulseController, curve: Curves.easeOut),
-    );
+    _scaleAnimation = Tween<double>(
+      begin: 0.75,
+      end: 1.9,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeOut));
+    _opacityAnimation = Tween<double>(
+      begin: 0.55,
+      end: 0.0,
+    ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeOut));
   }
 
   @override
@@ -50,7 +53,7 @@ class _FloatingSosButtonState extends State<FloatingSosButton>
           // Pulsing ring
           AnimatedBuilder(
             animation: _pulseController,
-            builder: (_, __) => Transform.scale(
+            builder: (_, _) => Transform.scale(
               scale: _scaleAnimation.value,
               child: Opacity(
                 opacity: _opacityAnimation.value,

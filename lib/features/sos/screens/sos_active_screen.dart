@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/widgets/beacon_ring.dart';
+
+import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/beacon_ring.dart';
 
 /// SOS Active screen — shown after SOS is triggered.
 /// Shows alert status checklist and emergency actions.
@@ -41,10 +42,7 @@ class SosActiveScreen extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 'Live for 02:14',
-                style: AppTextStyles.mono(
-                  fontSize: 11,
-                  color: AppColors.coral,
-                ),
+                style: AppTextStyles.mono(fontSize: 11, color: AppColors.coral),
               ),
               const SizedBox(height: 24),
 
@@ -62,11 +60,14 @@ class SosActiveScreen extends StatelessWidget {
                     children: const [
                       _StatusRow(label: 'Pod notified', done: true),
                       _StatusRow(
-                          label: 'Emergency contacts notified', done: true),
+                        label: 'Emergency contacts notified',
+                        done: true,
+                      ),
+                      _StatusRow(label: 'Live location sharing', done: true),
                       _StatusRow(
-                          label: 'Live location sharing', done: true),
-                      _StatusRow(
-                          label: 'Control room (112) pinged', done: false),
+                        label: 'Control room (112) pinged',
+                        done: false,
+                      ),
                     ],
                   ),
                 ),
@@ -150,20 +151,14 @@ class _StatusRow extends StatelessWidget {
         children: [
           Text(
             label,
-            style: AppTextStyles.body(
-              fontSize: 12.5,
-              color: AppColors.text,
-            ),
+            style: AppTextStyles.body(fontSize: 12.5, color: AppColors.text),
           ),
           if (done)
             const Icon(Icons.check_rounded, size: 15, color: AppColors.green)
           else
             Text(
               'pending',
-              style: AppTextStyles.mono(
-                fontSize: 10,
-                color: AppColors.faint,
-              ),
+              style: AppTextStyles.mono(fontSize: 10, color: AppColors.faint),
             ),
         ],
       ),

@@ -1,6 +1,9 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
+
+import '../../../core/theme/app_theme.dart';
+
 import 'dart:math' as math;
 
 /// Silent SOS trigger screen — hold-to-activate circular progress button.
@@ -65,8 +68,11 @@ class _SosTriggerScreenState extends State<SosTriggerScreen> {
                 children: [
                   GestureDetector(
                     onTap: widget.onCancel,
-                    child: const Icon(Icons.close_rounded,
-                        size: 20, color: AppColors.muted),
+                    child: const Icon(
+                      Icons.close_rounded,
+                      size: 20,
+                      color: AppColors.muted,
+                    ),
                   ),
                   Text(
                     'Silent SOS',
@@ -116,7 +122,9 @@ class _SosTriggerScreenState extends State<SosTriggerScreen> {
                                 color: AppColors.coral,
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppColors.coral.withValues(alpha: 0.33),
+                                    color: AppColors.coral.withValues(
+                                      alpha: 0.33,
+                                    ),
                                     blurRadius: 30,
                                   ),
                                 ],
@@ -168,14 +176,8 @@ class _SosTriggerScreenState extends State<SosTriggerScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-                  _TriggerOption(
-                    label: 'Power button pattern',
-                    onTap: () {},
-                  ),
-                  _TriggerOption(
-                    label: 'Shake gesture',
-                    onTap: () {},
-                  ),
+                  _TriggerOption(label: 'Power button pattern', onTap: () {}),
+                  _TriggerOption(label: 'Shake gesture', onTap: () {}),
                   _TriggerOption(
                     label: 'Preview decoy screen',
                     onTap: widget.onDecoy,
@@ -251,22 +253,20 @@ class _TriggerOption extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 10),
         decoration: BoxDecoration(
-          border: Border(
-            top: BorderSide(color: AppColors.border, width: 1),
-          ),
+          border: Border(top: BorderSide(color: AppColors.border, width: 1)),
         ),
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
               label,
-              style: AppTextStyles.body(
-                fontSize: 12.5,
-                color: AppColors.muted,
-              ),
+              style: AppTextStyles.body(fontSize: 12.5, color: AppColors.muted),
             ),
-            const Icon(Icons.chevron_right_rounded,
-                size: 14, color: AppColors.faint),
+            const Icon(
+              Icons.chevron_right_rounded,
+              size: 14,
+              color: AppColors.faint,
+            ),
           ],
         ),
       ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
+
+import '../../../core/theme/app_theme.dart';
 
 /// Home / Commute Dashboard — matches the JSX HomeScreen component.
 class HomeScreen extends StatelessWidget {
@@ -68,15 +69,21 @@ class HomeScreen extends StatelessWidget {
                               color: AppColors.muted,
                             ),
                           ),
-                          const Icon(Icons.verified_user_rounded,
-                              size: 16, color: AppColors.amber),
+                          const Icon(
+                            Icons.verified_user_rounded,
+                            size: 16,
+                            color: AppColors.amber,
+                          ),
                         ],
                       ),
                       const SizedBox(height: 16),
                       Row(
                         children: [
-                          const Icon(Icons.location_on_rounded,
-                              size: 13, color: AppColors.amber),
+                          const Icon(
+                            Icons.location_on_rounded,
+                            size: 13,
+                            color: AppColors.amber,
+                          ),
                           const SizedBox(width: 8),
                           Expanded(
                             child: Text(
@@ -92,8 +99,11 @@ class HomeScreen extends StatelessWidget {
                       const SizedBox(height: 6),
                       Row(
                         children: [
-                          const Icon(Icons.access_time_rounded,
-                              size: 12, color: AppColors.faint),
+                          const Icon(
+                            Icons.access_time_rounded,
+                            size: 12,
+                            color: AppColors.faint,
+                          ),
                           const SizedBox(width: 8),
                           Text(
                             'Est. 38 min · Auto + Metro',
@@ -239,11 +249,11 @@ class _LayerChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: active ? AppColors.amber.withValues(alpha: 0.1) : AppColors.surface,
+        color: active
+            ? AppColors.amber.withValues(alpha: 0.1)
+            : AppColors.surface,
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: active ? AppColors.amber : AppColors.border,
-        ),
+        border: Border.all(color: active ? AppColors.amber : AppColors.border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,

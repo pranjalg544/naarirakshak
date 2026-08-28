@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
+
+import '../../../core/theme/app_theme.dart';
 
 /// Emergency contacts management screen.
 /// Matches the JSX ContactsScreen component.
@@ -29,8 +30,11 @@ class ContactsScreen extends StatelessWidget {
                         fontWeight: FontWeight.w600,
                       ),
                     ),
-                    const Icon(Icons.person_add_rounded,
-                        size: 17, color: AppColors.amber),
+                    const Icon(
+                      Icons.person_add_rounded,
+                      size: 17,
+                      color: AppColors.amber,
+                    ),
                   ],
                 ),
               ),
@@ -85,8 +89,11 @@ class ContactsScreen extends StatelessWidget {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        const Icon(Icons.add_rounded,
-                            size: 14, color: AppColors.muted),
+                        const Icon(
+                          Icons.add_rounded,
+                          size: 14,
+                          color: AppColors.muted,
+                        ),
                         const SizedBox(width: 8),
                         Text(
                           'Add contact',
@@ -124,9 +131,7 @@ class _ContactRow extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 10),
       decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.border, width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
       ),
       child: Row(
         children: [
@@ -171,8 +176,11 @@ class _ContactRow extends StatelessWidget {
               ],
             ),
           ),
-          const Icon(Icons.chevron_right_rounded,
-              size: 14, color: AppColors.faint),
+          const Icon(
+            Icons.chevron_right_rounded,
+            size: 14,
+            color: AppColors.faint,
+          ),
         ],
       ),
     );

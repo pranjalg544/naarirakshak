@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
+
+import '../../../core/theme/app_theme.dart';
 
 /// Settings & Privacy screen.
 /// Matches the JSX SettingsScreen component.
@@ -122,9 +123,7 @@ class _ToggleRowState extends State<_ToggleRow> {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 14),
       decoration: BoxDecoration(
-        border: Border(
-          bottom: BorderSide(color: AppColors.border, width: 1),
-        ),
+        border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -167,8 +166,9 @@ class _ToggleRowState extends State<_ToggleRow> {
               ),
               child: AnimatedAlign(
                 duration: const Duration(milliseconds: 150),
-                alignment:
-                    _value ? Alignment.centerRight : Alignment.centerLeft,
+                alignment: _value
+                    ? Alignment.centerRight
+                    : Alignment.centerLeft,
                 child: Container(
                   width: 18,
                   height: 18,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
-import '../../core/widgets/beacon_ring.dart';
+
+import '../../../core/theme/app_theme.dart';
+import '../../../core/widgets/beacon_ring.dart';
 
 /// Onboarding screen — first screen seen by the user.
 /// Matches the JSX Onboarding component: beacon, title, tagline, feature icons, CTA.
@@ -63,7 +64,10 @@ class OnboardingScreen extends StatelessWidget {
                   children: [
                     _FeatureIcon(icon: Icons.people_rounded, label: 'Pods'),
                     const SizedBox(width: 40),
-                    _FeatureIcon(icon: Icons.cell_tower_rounded, label: 'Silent SOS'),
+                    _FeatureIcon(
+                      icon: Icons.cell_tower_rounded,
+                      label: 'Silent SOS',
+                    ),
                     const SizedBox(width: 40),
                     _FeatureIcon(icon: Icons.mic_rounded, label: 'AI Detect'),
                   ],

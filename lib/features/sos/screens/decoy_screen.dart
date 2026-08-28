@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
-import '../../core/theme/app_theme.dart';
+
+import '../../../core/theme/app_theme.dart';
 
 /// Decoy screen — fake incoming call from "Mom" to disguise the SOS trigger.
 /// Matches the JSX DecoyScreen component exactly.

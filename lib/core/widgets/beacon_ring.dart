@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import '../theme/app_theme.dart';
 
 /// Animated pulsing beacon — concentric rings that scale up and fade out.
@@ -34,28 +35,26 @@ class _BeaconRingState extends State<BeaconRing> with TickerProviderStateMixin {
 
   void _initAnimations() {
     const duration = Duration(milliseconds: 2600);
-    const stagger = Duration(milliseconds: 700);
-
     _controllers = List.generate(widget.ringCount, (i) {
       final controller = AnimationController(vsync: this, duration: duration);
       if (widget.active) {
-        Future.delayed(stagger * i, () {
-          if (mounted) controller.repeat();
-        });
+        controller.repeat();
       }
       return controller;
     });
 
     _scaleAnimations = _controllers.map((c) {
-      return Tween<double>(begin: 0.75, end: 1.9).animate(
-        CurvedAnimation(parent: c, curve: Curves.easeOut),
-      );
+      return Tween<double>(
+        begin: 0.75,
+        end: 1.9,
+      ).animate(CurvedAnimation(parent: c, curve: Curves.easeOut));
     }).toList();
 
     _opacityAnimations = _controllers.map((c) {
-      return Tween<double>(begin: 0.55, end: 0.0).animate(
-        CurvedAnimation(parent: c, curve: Curves.easeOut),
-      );
+      return Tween<double>(
+        begin: 0.55,
+        end: 0.0,
+      ).animate(CurvedAnimation(parent: c, curve: Curves.easeOut));
     }).toList();
   }
 
@@ -80,7 +79,7 @@ class _BeaconRingState extends State<BeaconRing> with TickerProviderStateMixin {
             ...List.generate(widget.ringCount, (i) {
               return AnimatedBuilder(
                 animation: _controllers[i],
-                builder: (_, __) {
+                builder: (_, _) {
                   return Transform.scale(
                     scale: _scaleAnimations[i].value,
                     child: Opacity(
@@ -90,10 +89,7 @@ class _BeaconRingState extends State<BeaconRing> with TickerProviderStateMixin {
                         height: widget.size,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
-                          border: Border.all(
-                            color: widget.color,
-                            width: 1.5,
-                          ),
+                          border: Border.all(color: widget.color, width: 1.5),
                         ),
                       ),
                     ),
