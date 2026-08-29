@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'core/theme/app_theme.dart';
+import 'core/widgets/auto_sos_overlay.dart';
 import 'core/widgets/beacon_ring.dart';
 import 'core/widgets/floating_sos_button.dart';
 import 'core/widgets/nav_bar.dart';
+import 'services/audio_detection_service.dart';
 
 void main() => runApp(const NariRakshakApp());
 
@@ -32,6 +34,7 @@ enum AppScreen {
   sos,
   sosActive,
   decoy,
+  autoSosCountdown,
 }
 
 class SafetyShell extends StatefulWidget {
@@ -45,6 +48,30 @@ class _SafetyShellState extends State<SafetyShell> {
   AppScreen _screen = AppScreen.onboarding;
   AppScreen _previousScreen = AppScreen.home;
   String _userName = '';
+  final _audioService = AudioDetectionService();
+  bool _audioEnabled = true;
+  double _triggerConfidence = 0.85;
+  StreamSubscription? _distressSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _distressSub = _audioService.onDistressDetected.listen((confidence) {
+      if (_audioEnabled && mounted) {
+        setState(() {
+          _triggerConfidence = confidence;
+          _screen = AppScreen.autoSosCountdown;
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _distressSub?.cancel();
+    _audioService.dispose();
+    super.dispose();
+  }
 
   bool get _hasNavigation => switch (_screen) {
     AppScreen.home ||
@@ -55,8 +82,15 @@ class _SafetyShellState extends State<SafetyShell> {
   };
 
   void _goTo(AppScreen screen) {
-    if (_screen != AppScreen.sos && _screen != AppScreen.decoy) {
+    if (_screen != AppScreen.sos &&
+        _screen != AppScreen.decoy &&
+        _screen != AppScreen.autoSosCountdown) {
       _previousScreen = _screen;
+    }
+    if (screen == AppScreen.pod && _audioEnabled) {
+      _audioService.startListening();
+    } else if (_screen == AppScreen.pod && screen != AppScreen.autoSosCountdown) {
+      _audioService.stopListening();
     }
     setState(() => _screen = screen);
   }
@@ -122,9 +156,20 @@ class _SafetyShellState extends State<SafetyShell> {
       userName: _userName,
       onStartCommute: () => _goTo(AppScreen.pod),
     ),
-    AppScreen.pod => PodView(onReached: () => _goTo(AppScreen.home)),
+    AppScreen.pod => PodView(
+      audioService: _audioService,
+      audioEnabled: _audioEnabled,
+      onReached: () {
+        _audioService.stopListening();
+        _goTo(AppScreen.home);
+      },
+    ),
     AppScreen.contacts => const ContactsView(),
-    AppScreen.settings => const SettingsView(),
+    AppScreen.settings => SettingsView(
+      audioEnabled: _audioEnabled,
+      onAudioToggle: (val) => setState(() => _audioEnabled = val),
+      audioService: _audioService,
+    ),
     AppScreen.sos => SosTriggerView(
       onActivate: () => _goTo(AppScreen.sosActive),
       onDecoy: () => _goTo(AppScreen.decoy),
@@ -134,6 +179,17 @@ class _SafetyShellState extends State<SafetyShell> {
       onResolve: () => _goTo(AppScreen.home),
     ),
     AppScreen.decoy => DecoyView(onBack: () => _goTo(AppScreen.sos)),
+    AppScreen.autoSosCountdown => AutoSosOverlay(
+      confidence: _triggerConfidence,
+      onCancel: () {
+        _audioService.resetAfterCancel();
+        _goTo(_previousScreen);
+      },
+      onTriggered: () {
+        _audioService.stopListening();
+        _goTo(AppScreen.sosActive);
+      },
+    ),
   };
 }
 
@@ -493,7 +549,6 @@ class HomeView extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) => _Page(
-    scrollable: false,
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -577,13 +632,72 @@ class HomeView extends StatelessWidget {
 
 class PodView extends StatelessWidget {
   final VoidCallback onReached;
-  const PodView({super.key, required this.onReached});
+  final AudioDetectionService audioService;
+  final bool audioEnabled;
+
+  const PodView({
+    super.key,
+    required this.onReached,
+    required this.audioService,
+    required this.audioEnabled,
+  });
+
   @override
   Widget build(BuildContext context) => _Page(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Your safety pod', style: AppTextStyles.display(fontSize: 19)),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Your safety pod', style: AppTextStyles.display(fontSize: 19)),
+            if (audioEnabled)
+              StreamBuilder<AudioDetectionSnapshot>(
+                stream: audioService.snapshots,
+                builder: (context, snapshot) {
+                  final data = snapshot.data;
+                  final isListening = data?.state == DetectionState.listening ||
+                      data?.state == DetectionState.detecting;
+                  final isDetecting = data?.state == DetectionState.detecting;
+
+                  return Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: isDetecting
+                          ? AppColors.coral.withValues(alpha: 0.15)
+                          : AppColors.amber.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: isDetecting ? AppColors.coral : AppColors.amber,
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          isDetecting ? Icons.graphic_eq : Icons.mic_rounded,
+                          size: 13,
+                          color: isDetecting ? AppColors.coral : AppColors.amber,
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          isDetecting
+                              ? 'Distress sound?'
+                              : (isListening ? 'AI Listening' : 'Audio Standby'),
+                          style: AppTextStyles.mono(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w600,
+                            color: isDetecting ? AppColors.coral : AppColors.amber,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+          ],
+        ),
         Text(
           'Matched by route · 4 of 5 checked in',
           style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
@@ -678,6 +792,7 @@ class _SosTriggerViewState extends State<SosTriggerView> {
 
   @override
   Widget build(BuildContext context) => _Page(
+    scrollable: false,
     child: Column(
       children: [
         Row(
@@ -775,7 +890,8 @@ class SosActiveView extends StatelessWidget {
         colors: [Color(0xFFFCE7E7), AppColors.bg],
       ),
     ),
-    child: Column(
+    child: SingleChildScrollView(
+      child: Column(
       children: [
         const SizedBox(height: 32),
         const BeaconRing(size: 92, color: AppColors.coral),
@@ -831,6 +947,7 @@ class SosActiveView extends StatelessWidget {
         ),
       ],
     ),
+    ),
   );
 }
 
@@ -844,7 +961,10 @@ class DecoyView extends StatelessWidget {
     onDoubleTap: onBack,
     child: Container(
       color: const Color(0xFF0B0B10),
-      child: Column(
+      child: SingleChildScrollView(
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height,
+          child: Column(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
@@ -924,6 +1044,8 @@ class DecoyView extends StatelessWidget {
           ),
         ],
       ),
+        ),
+      ),
     ),
   );
 }
@@ -988,13 +1110,25 @@ class ContactsView extends StatelessWidget {
 }
 
 class SettingsView extends StatefulWidget {
-  const SettingsView({super.key});
+  final bool audioEnabled;
+  final ValueChanged<bool> onAudioToggle;
+  final AudioDetectionService audioService;
+
+  const SettingsView({
+    super.key,
+    required this.audioEnabled,
+    required this.onAudioToggle,
+    required this.audioService,
+  });
+
   @override
   State<SettingsView> createState() => _SettingsViewState();
 }
 
 class _SettingsViewState extends State<SettingsView> {
-  final _values = [true, true, true, true];
+  final _otherValues = [true, true, true];
+  SensitivityLevel _sensitivity = SensitivityLevel.medium;
+
   @override
   Widget build(BuildContext context) => _Page(
     child: Column(
@@ -1004,34 +1138,70 @@ class _SettingsViewState extends State<SettingsView> {
         const SizedBox(height: 16),
         _Panel(
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _SettingRow(
                 icon: Icons.mic_none_rounded,
                 title: 'Passive audio detection',
                 sub: 'On-device only, opt-in, active during commutes',
-                value: _values[0],
-                onChanged: (v) => setState(() => _values[0] = v),
+                value: widget.audioEnabled,
+                onChanged: widget.onAudioToggle,
               ),
+              if (widget.audioEnabled) ...[
+                const Padding(
+                  padding: EdgeInsets.only(left: 28, top: 4, bottom: 8),
+                  child: Text(
+                    'Detection Sensitivity',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.muted),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(left: 28, bottom: 12),
+                  child: Row(
+                    children: SensitivityLevel.values.map((lvl) {
+                      final selected = _sensitivity == lvl;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: ChoiceChip(
+                          label: Text(
+                            lvl.name.toUpperCase(),
+                            style: AppTextStyles.mono(
+                              fontSize: 10,
+                              color: selected ? AppColors.bgDeep : AppColors.muted,
+                            ),
+                          ),
+                          selected: selected,
+                          selectedColor: AppColors.amber,
+                          onSelected: (_) {
+                            setState(() => _sensitivity = lvl);
+                            widget.audioService.sensitivity = lvl;
+                          },
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
               _SettingRow(
                 icon: Icons.people_alt_outlined,
                 title: 'Auto pod matching',
                 sub: 'Match with others on similar routes and timing',
-                value: _values[1],
-                onChanged: (v) => setState(() => _values[1] = v),
+                value: _otherValues[0],
+                onChanged: (v) => setState(() => _otherValues[0] = v),
               ),
               _SettingRow(
                 icon: Icons.location_on_outlined,
                 title: 'Precise location sharing',
                 sub: 'Share exact GPS instead of general area',
-                value: _values[2],
-                onChanged: (v) => setState(() => _values[2] = v),
+                value: _otherValues[1],
+                onChanged: (v) => setState(() => _otherValues[1] = v),
               ),
               _SettingRow(
                 icon: Icons.volume_up_outlined,
                 title: 'Decoy call on SOS',
                 sub: 'Show a fake incoming call when alert triggers',
-                value: _values[3],
-                onChanged: (v) => setState(() => _values[3] = v),
+                value: _otherValues[2],
+                onChanged: (v) => setState(() => _otherValues[2] = v),
               ),
             ],
           ),
