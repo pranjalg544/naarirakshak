@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NaariRakshak — Live OpenStreetMap Emergency Tracking</title>
+
+  <!-- OpenStreetMap Leaflet CSS & JS (100% Free) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: #1b2430; color: #fff; display: flex; flex-direction: column; height: 100vh; }
+    
+    header { background: #111720; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .logo-brand { font-size: 20px; font-weight: 700; color: #ff5a5f; letter-spacing: 0.5px; display: flex; align-items: center; gap: 10px; }
+    .status-badge { background: rgba(255, 90, 95, 0.2); color: #ff5a5f; border: 1px solid #ff5a5f; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 700; text-transform: uppercase; animation: pulse 1.5s infinite; }
+    
+    #map { flex: 1; width: 100%; z-index: 1; }
+
+    footer { background: #111720; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid rgba(255,255,255,0.1); font-size: 13px; color: #8b94a3; }
+    .stat-val { font-weight: 700; color: #e0993a; font-family: monospace; font-size: 15px; }
+
+    @keyframes pulse {
+      0% { opacity: 0.6; transform: scale(0.98); }
+      50% { opacity: 1; transform: scale(1.02); }
+      100% { opacity: 0.6; transform: scale(0.98); }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="logo-brand">
+      <span>🚨</span> NaariRakshak Emergency Monitor
+    </div>
+    <div class="status-badge">
+      LIVE SOS TRACKING · OPENSTREETMAP
+    </div>
+  </header>
+
+  <div id="map"></div>
+
+  <footer>
+    <div>Tracking Token: <span id="token-disp" class="stat-val">Loading...</span></div>
+    <div>Speed: <span id="speed-disp" class="stat-val">0 km/h</span></div>
+    <div>Battery: <span id="battery-disp" class="stat-val">100%</span></div>
+  </footer>
+
+  <script>
+    // Extract token from URL path
+    const pathParts = window.location.pathname.split('/');
+    const trackingToken = pathParts[pathParts.length - 1] || 'demo';
+    document.getElementById('token-disp').innerText = trackingToken;
+
+    // Initial default center (Kalkaji, Delhi)
+    const initialLat = 28.5350;
+    const initialLng = 77.2200;
+
+    // Initialize Leaflet OpenStreetMap (100% Free, No Watermark)
+    const map = L.map('map').setView([initialLat, initialLng], 15);
+
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    // Custom Pulsing Emergency Marker Icon
+    const emergencyIcon = L.divIcon({
+        className: 'custom-emergency-marker',
+        html: '<div style="background:#ff5a5f; width:24px; height:24px; border-radius:50%; border:3px solid #fff; box-shadow:0 0 15px #ff5a5f; animation: pulse 1.2s infinite;"></div>',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+    });
+
+    const marker = L.marker([initialLat, initialLng], { icon: emergencyIcon }).addTo(map);
+    marker.bindPopup("<b>🚨 EMERGENCY LIVE POSITION</b><br>Tracked via OpenStreetMap").openPopup();
+
+    // Polyline trail
+    const polyline = L.polyline([[initialLat, initialLng]], { color: '#ff5a5f', weight: 4 }).addTo(map);
+
+    // Connect to WebSockets
+    const socket = io();
+
+    socket.on('connect', () => {
+        console.log('Connected to socket gateway');
+        socket.emit('join_tracking_room', trackingToken);
+    });
+
+    socket.on('location_broadcast', (data) => {
+        const { lat, lng, speed, batteryLevel } = data;
+        
+        // Move marker & map smoothly
+        const newLatLng = [lat, lng];
+        marker.setLatLng(newLatLng);
+        map.panTo(newLatLng);
+        polyline.addLatLng(newLatLng);
+
+        document.getElementById('speed-disp').innerText = `${speed} km/h`;
+        document.getElementById('battery-disp').innerText = `${batteryLevel}%`;
+    });
+  </script>
+</body>
+</html>

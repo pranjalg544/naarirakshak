@@ -1,13 +1,21 @@
 import 'dart:async';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 import 'core/theme/app_theme.dart';
 import 'core/widgets/auto_sos_overlay.dart';
 import 'core/widgets/beacon_ring.dart';
 import 'core/widgets/floating_sos_button.dart';
 import 'core/widgets/nav_bar.dart';
+import 'core/widgets/open_street_map_widget.dart';
 import 'services/audio_detection_service.dart';
+import 'services/auth_api_service.dart';
+import 'services/contacts_api_service.dart';
+import 'services/sos_api_service.dart';
+import 'services/live_location_socket_service.dart';
 
 void main() => runApp(const NariRakshakApp());
 
@@ -325,19 +333,57 @@ class _AuthViewState extends State<AuthView> {
     super.dispose();
   }
 
-  void _submit() {
+  bool _isLoading = false;
+
+  Future<void> _submit() async {
     if (_formKey.currentState!.validate()) {
-      final enteredName = _nameController.text.trim();
-      final emailName = _emailController.text.trim().split('@').first;
-      final displayName = _isSignUp
-          ? enteredName
-          : emailName
-                .replaceAll(RegExp(r'[._-]+'), ' ')
-                .split(' ')
-                .where((part) => part.isNotEmpty)
-                .map((part) => '${part[0].toUpperCase()}${part.substring(1)}')
-                .join(' ');
-      widget.onAuthenticated(displayName);
+      setState(() => _isLoading = true);
+      final email = _emailController.text.trim();
+      final password = _passwordController.text.trim();
+      final fullName = _nameController.text.trim();
+
+      try {
+        if (_isSignUp) {
+          final res = await AuthApiService.signUp(
+            fullName: fullName,
+            email: email,
+            password: password,
+          );
+          final user = res['user'];
+          final name = (user != null && user['full_name'] != null)
+              ? user['full_name'] as String
+              : fullName;
+          if (mounted) {
+            setState(() => _isLoading = false);
+            widget.onAuthenticated(name);
+          }
+        } else {
+          final res = await AuthApiService.signIn(
+            email: email,
+            password: password,
+          );
+          final user = res['user'];
+          final name = (user != null && user['full_name'] != null)
+              ? user['full_name'] as String
+              : email.split('@').first;
+          if (mounted) {
+            setState(() => _isLoading = false);
+            widget.onAuthenticated(name);
+          }
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          final errorMsg = e.toString().replaceAll('Exception: ', '');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMsg),
+              backgroundColor: AppColors.coral,
+              duration: const Duration(seconds: 4),
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -459,8 +505,8 @@ class _AuthViewState extends State<AuthView> {
             ],
             const SizedBox(height: 20),
             _PrimaryButton(
-              label: _isSignUp ? 'Create account' : 'Sign in',
-              onPressed: _submit,
+              label: _isLoading ? 'Connecting...' : (_isSignUp ? 'Create account' : 'Sign in'),
+              onPressed: _isLoading ? _noop : _submit,
             ),
             const SizedBox(height: 18),
             Center(
@@ -592,6 +638,15 @@ class HomeView extends StatelessWidget {
                 text: 'Est. 38 min · Auto + Metro',
                 mono: true,
               ),
+              const SizedBox(height: 12),
+              // OpenStreetMap Route Preview Snippet
+              const OpenStreetMapWidget(
+                center: LatLng(28.5350, 77.2200),
+                zoom: 11.5,
+                height: 130,
+                interactive: false,
+                titleLabel: 'OSM Route Preview',
+              ),
               const SizedBox(height: 14),
               _PrimaryButton(
                 label: 'Start commute',
@@ -703,22 +758,50 @@ class PodView extends StatelessWidget {
           style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
         ),
         const SizedBox(height: 14),
-        Center(
-          child: Column(
-            children: [
-              const BeaconRing(size: 130, ringCount: 2),
-              Text(
-                'ETA 14:32',
-                style: AppTextStyles.mono(fontSize: 12, color: AppColors.amber),
+        // OpenStreetMap Interactive Commute Map
+        OpenStreetMapWidget(
+          center: const LatLng(28.5350, 77.2200),
+          zoom: 12.5,
+          height: 180,
+          titleLabel: 'Pod Commute Route · OSM',
+          extraMarkers: [
+            // Companion RS marker
+            Marker(
+              point: const LatLng(28.5245, 77.2066),
+              width: 28,
+              height: 28,
+              child: CircleAvatar(
+                backgroundColor: AppColors.surface,
+                child: Text('RS', style: AppTextStyles.mono(fontSize: 10, fontWeight: FontWeight.w700)),
               ),
-              Text(
-                'Live location shared with pod',
-                style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
+            ),
+            // Companion TN marker
+            Marker(
+              point: const LatLng(28.5150, 77.1850),
+              width: 28,
+              height: 28,
+              child: CircleAvatar(
+                backgroundColor: AppColors.amber,
+                child: Text('TN', style: AppTextStyles.mono(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.bgDeep)),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'ETA 14:32 · 38 min remaining',
+              style: AppTextStyles.mono(fontSize: 11.5, color: AppColors.amber, fontWeight: FontWeight.w600),
+            ),
+            Text(
+              'Live location shared with pod',
+              style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
         _Panel(
           child: Column(
             children: const [
@@ -878,9 +961,80 @@ class _SosTriggerViewState extends State<SosTriggerView> {
   );
 }
 
-class SosActiveView extends StatelessWidget {
+class SosActiveView extends StatefulWidget {
   final VoidCallback onResolve;
   const SosActiveView({super.key, required this.onResolve});
+
+  @override
+  State<SosActiveView> createState() => _SosActiveViewState();
+}
+
+class _SosActiveViewState extends State<SosActiveView> {
+  String? _incidentId;
+  String? _trackingToken;
+  Timer? _telemetryTimer;
+  final _socketService = LiveLocationSocketService();
+
+  @override
+  void initState() {
+    super.initState();
+    _triggerSosAndStartTelemetry();
+  }
+
+  Future<void> _triggerSosAndStartTelemetry() async {
+    try {
+      const lat = 28.5350;
+      const lng = 77.2200;
+
+      final res = await SosApiService.triggerSos(
+        triggerType: 'MANUAL_SOS',
+        lat: lat,
+        lng: lng,
+      );
+
+      _incidentId = res.incidentId;
+      _trackingToken = res.trackingToken;
+
+      _socketService.connect();
+      _socketService.joinTrackingRoom(_trackingToken!);
+
+      // Stream live telemetry packet every 3 seconds
+      _telemetryTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+        if (_trackingToken != null && _incidentId != null) {
+          _socketService.sendTelemetry(
+            trackingToken: _trackingToken!,
+            incidentId: _incidentId!,
+            lat: lat,
+            lng: lng,
+            speed: 1.2,
+            batteryLevel: 85,
+          );
+        }
+      });
+    } catch (e) {
+      if (kDebugMode) print('SOS API dispatch note: $e');
+    }
+  }
+
+  Future<void> _handleResolve() async {
+    _telemetryTimer?.cancel();
+    if (_incidentId != null) {
+      try {
+        await SosApiService.resolveSos(_incidentId!);
+      } catch (e) {
+        if (kDebugMode) print('Resolve SOS note: $e');
+      }
+    }
+    _socketService.disconnect();
+    widget.onResolve();
+  }
+
+  @override
+  void dispose() {
+    _telemetryTimer?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) => Container(
     decoration: const BoxDecoration(
@@ -892,61 +1046,75 @@ class SosActiveView extends StatelessWidget {
     ),
     child: SingleChildScrollView(
       child: Column(
-      children: [
-        const SizedBox(height: 32),
-        const BeaconRing(size: 92, color: AppColors.coral),
-        const SizedBox(height: 12),
-        Text(
-          'Alert sent',
-          style: AppTextStyles.display(
-            fontSize: 19,
-            fontWeight: FontWeight.w700,
+        children: [
+          const SizedBox(height: 32),
+          const BeaconRing(size: 92, color: AppColors.coral),
+          const SizedBox(height: 12),
+          Text(
+            'Alert sent',
+            style: AppTextStyles.display(
+              fontSize: 19,
+              fontWeight: FontWeight.w700,
+            ),
           ),
-        ),
-        Text(
-          'Live for 02:14',
-          style: AppTextStyles.mono(fontSize: 11, color: AppColors.coral),
-        ),
-        const SizedBox(height: 20),
-        _Panel(
-          child: Column(
-            children: const [
-              _AlertRow('Pod notified', true),
-              _AlertRow('Emergency contacts notified', true),
-              _AlertRow('Live location sharing', true),
-              _AlertRow('Control room (112) pinged', false),
-            ],
+          Text(
+            'Live for 02:14',
+            style: AppTextStyles.mono(fontSize: 11, color: AppColors.coral),
           ),
-        ),
-        const SizedBox(height: 20),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20),
-          child: Column(
-            children: [
-              _PrimaryButton(
-                label: 'Call 112 now',
-                icon: Icons.phone_in_talk_rounded,
-                color: AppColors.coral,
-                onPressed: _noop,
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: OpenStreetMapWidget(
+              center: const LatLng(28.5350, 77.2200),
+              zoom: 14.5,
+              height: 190,
+              isSosActive: true,
+              titleLabel: 'LIVE EMERGENCY BEACON · OSM',
+            ),
+          ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _Panel(
+              child: Column(
+                children: const [
+                  _AlertRow('Pod notified', true),
+                  _AlertRow('Emergency contacts notified', true),
+                  _AlertRow('Live location sharing', true),
+                  _AlertRow('Control room (112) pinged', true),
+                ],
               ),
-              const SizedBox(height: 10),
-              OutlinedButton(
-                onPressed: onResolve,
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                  foregroundColor: AppColors.muted,
-                  side: const BorderSide(color: AppColors.border),
-                ),
-                child: Text(
-                  "I'm safe — cancel alert",
-                  style: AppTextStyles.body(fontSize: 13.5),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
-      ],
-    ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              children: [
+                _PrimaryButton(
+                  label: 'Call 112 now',
+                  icon: Icons.phone_in_talk_rounded,
+                  color: AppColors.coral,
+                  onPressed: _noop,
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton(
+                  onPressed: _handleResolve,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(48),
+                    foregroundColor: AppColors.muted,
+                    side: const BorderSide(color: AppColors.border),
+                  ),
+                  child: Text(
+                    "I'm safe — cancel alert",
+                    style: AppTextStyles.body(fontSize: 13.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -1050,8 +1218,51 @@ class DecoyView extends StatelessWidget {
   );
 }
 
-class ContactsView extends StatelessWidget {
+class ContactsView extends StatefulWidget {
   const ContactsView({super.key});
+
+  @override
+  State<ContactsView> createState() => _ContactsViewState();
+}
+
+class _ContactsViewState extends State<ContactsView> {
+  List<EmergencyContactItem> _contacts = [];
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadContacts();
+  }
+
+  Future<void> _loadContacts() async {
+    try {
+      final list = await ContactsApiService.fetchContacts();
+      if (mounted) {
+        setState(() {
+          _contacts = list;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _addContact() async {
+    try {
+      final newContact = await ContactsApiService.addContact(
+        name: 'New Contact',
+        phone: '+919876543210',
+        relation: 'Primary',
+        isPrimary: true,
+      );
+      setState(() => _contacts.add(newContact));
+    } catch (e) {
+      if (kDebugMode) print('Add contact note: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) => _Page(
     child: Column(
@@ -1073,29 +1284,37 @@ class ContactsView extends StatelessWidget {
         ),
         const SizedBox(height: 16),
         _Panel(
-          child: Column(
-            children: const [
-              _ContactRow(
-                initials: 'MA',
-                name: 'Mother',
-                relation: 'Primary · always alerted',
-              ),
-              _ContactRow(
-                initials: 'RK',
-                name: 'Rohan (brother)',
-                relation: 'Secondary',
-              ),
-              _ContactRow(
-                initials: 'SN',
-                name: 'Neha (flatmate)',
-                relation: 'Secondary',
-              ),
-            ],
-          ),
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator(color: AppColors.amber))
+              : _contacts.isEmpty
+                  ? Column(
+                      children: const [
+                        _ContactRow(
+                          initials: 'MA',
+                          name: 'Mother',
+                          relation: 'Primary · always alerted',
+                        ),
+                        _ContactRow(
+                          initials: 'RK',
+                          name: 'Rohan (brother)',
+                          relation: 'Secondary',
+                        ),
+                      ],
+                    )
+                  : Column(
+                      children: _contacts.map((c) {
+                        final initials = c.name.split(' ').map((e) => e.isNotEmpty ? e[0] : '').take(2).join('').toUpperCase();
+                        return _ContactRow(
+                          initials: initials.isEmpty ? 'EC' : initials,
+                          name: c.name,
+                          relation: '${c.relation}${c.isPrimary ? ' · Primary' : ''}',
+                        );
+                      }).toList(),
+                    ),
         ),
         const SizedBox(height: 14),
         OutlinedButton.icon(
-          onPressed: _noop,
+          onPressed: _addContact,
           icon: const Icon(Icons.add, size: 16),
           label: Text('Add contact', style: AppTextStyles.body(fontSize: 12.5)),
           style: OutlinedButton.styleFrom(

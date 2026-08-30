@@ -46,3 +46,10 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Backend (Node.js) related
+backend/node_modules/
+backend/dist/
+backend/build/
+backend/.env
+.env
