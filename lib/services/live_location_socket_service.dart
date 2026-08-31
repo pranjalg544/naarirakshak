@@ -56,7 +56,7 @@ class LiveLocationSocketService {
 
   void sendTelemetry({
     required String trackingToken,
-    required String incidentId,
+    String? incidentId,
     required double lat,
     required double lng,
     double speed = 0.0,

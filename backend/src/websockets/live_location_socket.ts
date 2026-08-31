@@ -14,7 +14,7 @@ export function setupLiveLocationSockets(io: Server) {
     // Ingest live GPS packet from Flutter app & broadcast to web map viewers
     socket.on('telemetry_update', async (data: {
       trackingToken: string;
-      incidentId: string;
+      incidentId?: string;
       lat: number;
       lng: number;
       speed?: number;

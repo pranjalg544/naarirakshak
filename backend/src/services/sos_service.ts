@@ -35,13 +35,13 @@ export async function triggerSosIncident(
   );
 
   // 3. Dispatch emergency notifications asynchronously
-  dispatchEmergencyAlerts(incident.id, userId, trackingToken, lat, lng).catch((err) => {
-    console.error('Error dispatching emergency alerts:', err);
-  });
+  const dispatch = await dispatchEmergencyAlerts(incident.id, userId, trackingToken, lat, lng);
 
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
   return {
     incident,
-    liveTrackingUrl: `http://localhost:3000/track/${trackingToken}`,
+    liveTrackingUrl: `${publicBaseUrl}/track/${trackingToken}`,
+    dispatch,
   };
 }
 

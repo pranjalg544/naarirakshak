@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/app_theme.dart';
 
-/// Bottom navigation bar matching the JSX NavBar — four tabs with icons.
+/// Bottom navigation bar for the primary app sections.
 class AppNavBar extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTap;
@@ -13,7 +13,7 @@ class AppNavBar extends StatelessWidget {
     _NavItem(icon: Icons.home_rounded, label: 'Home'),
     _NavItem(icon: Icons.people_rounded, label: 'Pod'),
     _NavItem(icon: Icons.phone_rounded, label: 'Contacts'),
-    _NavItem(icon: Icons.settings_rounded, label: 'Settings'),
+    _NavItem(icon: Icons.account_circle_rounded, label: 'Account'),
   ];
 
   @override

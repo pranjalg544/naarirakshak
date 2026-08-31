@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { authenticateJwt, AuthenticatedRequest } from '../middlewares/auth_middleware';
 import { triggerSosIncident, resolveSosIncident } from '../services/sos_service';
+import { query } from '../config/db';
 
 const router = Router();
 
@@ -18,6 +19,25 @@ router.post('/trigger', authenticateJwt, async (req: AuthenticatedRequest, res) 
     return res.status(201).json({ success: true, ...result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// Public read-only endpoint used by emergency contacts before the socket stream starts.
+router.get('/track/:token/latest', async (req, res) => {
+  try {
+    const result = await query(
+      `SELECT it.latitude, it.longitude, it.speed, it.battery_level, it.recorded_at
+       FROM incident_telemetry it
+       JOIN incidents i ON i.id = it.incident_id
+       WHERE i.tracking_token = $1
+       ORDER BY it.recorded_at DESC
+       LIMIT 1`,
+      [req.params.token]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ message: 'Tracking location not found.' });
+    return res.json(result.rows[0]);
+  } catch (error: any) {
+    return res.status(500).json({ message: error.message });
   }
 });
 

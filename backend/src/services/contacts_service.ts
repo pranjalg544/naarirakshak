@@ -1,5 +1,12 @@
 import { query } from '../config/db';
 
+function normalizePhone(phone: string) {
+  const digits = phone.replace(/[\s()-]/g, '');
+  if (/^\d{10}$/.test(digits)) return `+91${digits}`;
+  if (/^0\d{10}$/.test(digits)) return `+91${digits.substring(1)}`;
+  return digits;
+}
+
 export async function getUserContacts(userId: string) {
   const res = await query(
     'SELECT * FROM emergency_contacts WHERE user_id = $1 ORDER BY priority_order ASC',
@@ -15,6 +22,7 @@ export async function addEmergencyContact(
   relation: string,
   isPrimary: boolean = false
 ) {
+  const normalizedPhone = normalizePhone(phone);
   if (isPrimary) {
     await query(
       'UPDATE emergency_contacts SET is_primary = FALSE WHERE user_id = $1',
@@ -31,7 +39,7 @@ export async function addEmergencyContact(
        relationship = EXCLUDED.relationship,
        is_primary = EXCLUDED.is_primary
      RETURNING *`,
-    [userId, name, phone, relation, isPrimary]
+    [userId, name, normalizedPhone, relation, isPrimary]
   );
   return res.rows[0];
 }

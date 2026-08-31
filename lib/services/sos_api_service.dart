@@ -12,10 +12,11 @@ class SosIncidentResult {
   });
 
   factory SosIncidentResult.fromJson(Map<String, dynamic> json) {
+    final incident = json['incident'] as Map<String, dynamic>? ?? json;
     return SosIncidentResult(
-      incidentId: json['incidentId'] as String,
-      trackingToken: json['trackingToken'] as String,
-      trackingUrl: json['trackingUrl'] as String,
+      incidentId: (incident['id'] ?? json['incidentId']) as String,
+      trackingToken: (incident['tracking_token'] ?? json['trackingToken']) as String,
+      trackingUrl: (json['liveTrackingUrl'] ?? json['trackingUrl']) as String,
     );
   }
 }

@@ -9,6 +9,7 @@ export async function startCommuteAndMatchPod(
   destLat: number,
   destLng: number
 ) {
+  const trackingToken = `commute_trk_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
   // 1. Create PostGIS Commute Session record
   const commuteRes = await query(
     `INSERT INTO commute_sessions (
@@ -91,6 +92,7 @@ export async function startCommuteAndMatchPod(
       id: podId,
       podCode,
     },
+    trackingToken,
   };
 }
 

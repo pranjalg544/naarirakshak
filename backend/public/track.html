@@ -55,9 +55,9 @@
     const trackingToken = pathParts[pathParts.length - 1] || 'demo';
     document.getElementById('token-disp').innerText = trackingToken;
 
-    // Initial default center (Kalkaji, Delhi)
-    const initialLat = 28.5350;
-    const initialLng = 77.2200;
+    // Start with a neutral fallback, then replace it with the latest GPS point.
+    let initialLat = 28.5350;
+    let initialLng = 77.2200;
 
     // Initialize Leaflet OpenStreetMap (100% Free, No Watermark)
     const map = L.map('map').setView([initialLat, initialLng], 15);
@@ -83,6 +83,18 @@
 
     // Connect to WebSockets
     const socket = io();
+
+    fetch(`/api/v1/sos/track/${encodeURIComponent(trackingToken)}/latest`)
+      .then((response) => response.ok ? response.json() : Promise.reject(response.status))
+      .then((data) => {
+        const latest = [Number(data.latitude), Number(data.longitude)];
+        marker.setLatLng(latest);
+        map.setView(latest, 15);
+        polyline.setLatLngs([latest]);
+        document.getElementById('speed-disp').innerText = `${data.speed || 0} km/h`;
+        document.getElementById('battery-disp').innerText = `${data.battery_level || 100}%`;
+      })
+      .catch(() => {});
 
     socket.on('connect', () => {
         console.log('Connected to socket gateway');

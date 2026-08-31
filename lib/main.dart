@@ -1,7 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import 'package:sensors_plus/sensors_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:latlong2/latlong.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,6 +19,7 @@ import 'core/widgets/open_street_map_widget.dart';
 import 'services/audio_detection_service.dart';
 import 'services/auth_api_service.dart';
 import 'services/contacts_api_service.dart';
+import 'services/commute_api_service.dart';
 import 'services/location_service.dart';
 import 'services/sos_api_service.dart';
 import 'services/live_location_socket_service.dart';
@@ -65,6 +70,8 @@ class _SafetyShellState extends State<SafetyShell> {
 
   // Primary contact name (for DecoyView)
   String _primaryContactName = '';
+  String? _commuteTrackingToken;
+  bool _automaticSos = false;
 
   final _audioService = AudioDetectionService();
   bool _audioEnabled = true;
@@ -78,6 +85,7 @@ class _SafetyShellState extends State<SafetyShell> {
       if (_audioEnabled && mounted) {
         setState(() {
           _triggerConfidence = confidence;
+          _automaticSos = true;
           _screen = AppScreen.autoSosCountdown;
         });
       }
@@ -99,6 +107,9 @@ class _SafetyShellState extends State<SafetyShell> {
     _ => false,
   };
 
+  bool get _showBackArrow => _screen == AppScreen.pod ||
+      _screen == AppScreen.contacts || _screen == AppScreen.settings;
+
   void _goTo(AppScreen screen) {
     if (_screen != AppScreen.sos &&
         _screen != AppScreen.decoy &&
@@ -113,6 +124,20 @@ class _SafetyShellState extends State<SafetyShell> {
     setState(() => _screen = screen);
   }
 
+  Future<bool> _handleBack() async {
+    if (_screen == AppScreen.onboarding) return true;
+    if (_screen == AppScreen.auth) {
+      _goTo(AppScreen.onboarding);
+    } else if (_hasNavigation) {
+      _goTo(_previousScreen == _screen ? AppScreen.home : _previousScreen);
+    } else if (_screen == AppScreen.sosActive || _screen == AppScreen.sos) {
+      _goTo(AppScreen.home);
+    } else {
+      _goTo(AppScreen.home);
+    }
+    return false;
+  }
+
   void _navigateToTab(int index) {
     _goTo(
       [
@@ -125,12 +150,31 @@ class _SafetyShellState extends State<SafetyShell> {
   }
 
   /// Called when user selects a destination on the home screen.
-  void _startCommuteWithDestination(String name, LatLng latLng) {
+  Future<void> _startCommuteWithDestination(String name, LatLng latLng) async {
     setState(() {
       _destinationName = name;
       _destinationLatLng = latLng;
+      _commuteTrackingToken = null;
     });
     _goTo(AppScreen.pod);
+
+    try {
+      final origin = await LocationService().getCurrentLocation();
+      final result = await CommuteApiService.startCommute(
+        originName: 'Current location', destinationName: name,
+        originLat: origin.latitude, originLng: origin.longitude,
+        destLat: latLng.latitude, destLng: latLng.longitude,
+      );
+      if (mounted) {
+        setState(() => _commuteTrackingToken = result['trackingToken'] as String?);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceAll('Exception: ', ''))),
+        );
+      }
+    }
   }
 
   /// Called from ContactsView when the primary contact changes.
@@ -140,14 +184,25 @@ class _SafetyShellState extends State<SafetyShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (_, _) => _handleBack(),
+      child: Scaffold(
       backgroundColor: const Color(0xFFE9E2F2),
       body: SafeArea(
         child: Stack(
           children: [
             Column(
               children: [
-                _StatusBar(),
+                if (_showBackArrow)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      tooltip: 'Back',
+                      onPressed: _handleBack,
+                      icon: const Icon(Icons.arrow_back_rounded),
+                    ),
+                  ),
                 Expanded(child: _screenView()),
                 if (_hasNavigation)
                   AppNavBar(
@@ -169,6 +224,7 @@ class _SafetyShellState extends State<SafetyShell> {
               ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -193,6 +249,7 @@ class _SafetyShellState extends State<SafetyShell> {
       audioEnabled: _audioEnabled,
       destinationName: _destinationName,
       destinationLatLng: _destinationLatLng,
+      trackingToken: _commuteTrackingToken,
       onReached: () {
         _audioService.stopListening();
         setState(() {
@@ -212,11 +269,13 @@ class _SafetyShellState extends State<SafetyShell> {
       onNavigateContacts: () => _goTo(AppScreen.contacts),
     ),
     AppScreen.sos => SosTriggerView(
-      onActivate: () => _goTo(AppScreen.sosActive),
+      onActivate: () { _automaticSos = false; _goTo(AppScreen.sosActive); },
       onDecoy: () => _goTo(AppScreen.decoy),
       onCancel: () => _goTo(_previousScreen),
     ),
     AppScreen.sosActive => SosActiveView(
+      triggerType: _automaticSos ? 'AUDIO_DISTRESS' : 'MANUAL_SOS',
+      confidenceScore: _triggerConfidence,
       onResolve: () => _goTo(AppScreen.home),
     ),
     AppScreen.decoy => DecoyView(
@@ -235,32 +294,6 @@ class _SafetyShellState extends State<SafetyShell> {
       },
     ),
   };
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Status Bar
-// ─────────────────────────────────────────────────────────────────────────────
-
-class _StatusBar extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.fromLTRB(24, 8, 24, 2),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text('9:41', style: AppTextStyles.mono(fontSize: 11)),
-        Row(
-          children: const [
-            Icon(Icons.signal_cellular_alt_rounded, size: 14),
-            SizedBox(width: 6),
-            Icon(Icons.wifi_rounded, size: 14),
-            SizedBox(width: 6),
-            Icon(Icons.battery_full_rounded, size: 16),
-          ],
-        ),
-      ],
-    ),
-  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -384,7 +417,9 @@ class _AuthViewState extends State<AuthView> {
 
   Future<void> _submit() async {
     if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
+          setState(() {
+            _isLoading = true;
+          });
       final email = _emailController.text.trim();
       final password = _passwordController.text.trim();
       final fullName = _nameController.text.trim();
@@ -558,7 +593,13 @@ class _AuthViewState extends State<AuthView> {
             const SizedBox(height: 18),
             Center(
               child: TextButton(
-                onPressed: () => setState(() => _isSignUp = !_isSignUp),
+                onPressed: () => setState(() {
+                  _isSignUp = !_isSignUp;
+                  if (_isSignUp) {
+                    _emailController.clear();
+                    _passwordController.clear();
+                  }
+                }),
                 child: Text(
                   _isSignUp
                       ? 'Already have an account? Sign in'
@@ -652,24 +693,27 @@ class HomeView extends StatefulWidget {
 class _HomeViewState extends State<HomeView> {
   /// Returns a friendly greeting based on the current hour.
   String _greeting() {
-    final hour = DateTime.now().hour;
+    final istNow = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30));
+    final hour = istNow.hour;
     if (hour < 12) return 'Good morning,';
     if (hour < 17) return 'Good afternoon,';
     return 'Good evening,';
   }
 
-  void _openDestinationPicker() {
-    showModalBottomSheet<void>(
+  Future<void> _openDestinationPicker() async {
+    final destination = await showModalBottomSheet<_Destination>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _DestinationPickerSheet(
-        onConfirm: (name, latLng) {
-          Navigator.of(ctx).pop();
-          widget.onStartCommute(name, latLng);
+      builder: (_) => _DestinationPickerSheet(
+        onConfirm: (name, location) {
+          Navigator.of(context).pop(_Destination(name, location));
         },
       ),
     );
+    if (destination != null && mounted) {
+      widget.onStartCommute(destination.name, destination.location);
+    }
   }
 
   @override
@@ -713,7 +757,6 @@ class _HomeViewState extends State<HomeView> {
                 style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
               ),
               const SizedBox(height: 14),
-              // Live GPS map — no fake route/destination, just user's real location
               const OpenStreetMapWidget(
                 center: LocationService.defaultLocation,
                 zoom: 13.5,
@@ -732,41 +775,20 @@ class _HomeViewState extends State<HomeView> {
           ),
         ),
         const SizedBox(height: 20),
-        _Panel(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'YOUR SAFETY LAYERS',
-                style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
-              ),
-              const SizedBox(height: 14),
-              _SafetyLayerTile(
-                icon: Icons.people_alt_outlined,
-                title: 'Pod matching',
-                subtitle: 'Auto-matched with others on similar routes',
-              ),
-              _SafetyLayerTile(
-                icon: Icons.radio_outlined,
-                title: 'Silent SOS',
-                subtitle: 'Press & hold the red button to trigger',
-              ),
-              _SafetyLayerTile(
-                icon: Icons.mic_none_rounded,
-                title: 'Audio detection',
-                subtitle: 'On-device AI listens during active commutes',
-              ),
-            ],
-          ),
-        ),
       ],
     ),
   );
 }
 
+class _Destination {
+  final String name;
+  final LatLng location;
+  const _Destination(this.name, this.location);
+}
+
 /// Bottom sheet for the user to type where they are heading.
 class _DestinationPickerSheet extends StatefulWidget {
-  final void Function(String name, LatLng latLng) onConfirm;
+  final void Function(String name, LatLng location) onConfirm;
   const _DestinationPickerSheet({required this.onConfirm});
 
   @override
@@ -775,6 +797,8 @@ class _DestinationPickerSheet extends StatefulWidget {
 
 class _DestinationPickerSheetState extends State<_DestinationPickerSheet> {
   final _controller = TextEditingController();
+  Timer? _searchTimer;
+  List<Map<String, dynamic>> _suggestions = [];
   bool _hasInput = false;
 
   /// Simple geocode-style suggestions (user can type freely — we use the
@@ -784,26 +808,47 @@ class _DestinationPickerSheetState extends State<_DestinationPickerSheet> {
   void initState() {
     super.initState();
     _controller.addListener(() {
-      setState(() => _hasInput = _controller.text.trim().isNotEmpty);
+      final query = _controller.text.trim();
+      setState(() => _hasInput = query.isNotEmpty);
+      _searchTimer?.cancel();
+      if (query.length >= 3) {
+        _searchTimer = Timer(const Duration(milliseconds: 450), () => _search(query));
+      } else {
+        setState(() => _suggestions = []);
+      }
     });
+  }
+
+  Future<void> _search(String query) async {
+    try {
+      final response = await http.get(
+        Uri.https('nominatim.openstreetmap.org', '/search', {
+          'q': query, 'format': 'jsonv2', 'limit': '5', 'countrycodes': 'in',
+        }),
+        headers: const {'User-Agent': 'NaariRakshak/1.0'},
+      );
+      if (!mounted || response.statusCode != 200) return;
+      final results = (jsonDecode(response.body) as List).cast<Map<String, dynamic>>();
+      if (_controller.text.trim() == query) setState(() => _suggestions = results);
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _searchTimer?.cancel();
     super.dispose();
   }
 
   void _confirm() {
     final name = _controller.text.trim();
     if (name.isEmpty) return;
-    // Use a slight offset from the default location as a stand-in destination
-    // until a geocoding integration (e.g. Nominatim) is added.
-    final destinationLatLng = LatLng(
-      LocationService.defaultLocation.latitude + 0.05,
-      LocationService.defaultLocation.longitude + 0.10,
+    if (_suggestions.isEmpty) return;
+    final selected = _suggestions.first;
+    widget.onConfirm(
+      selected['display_name'] as String? ?? name,
+      LatLng(double.parse(selected['lat'] as String), double.parse(selected['lon'] as String)),
     );
-    widget.onConfirm(name, destinationLatLng);
   }
 
   @override
@@ -829,6 +874,26 @@ class _DestinationPickerSheetState extends State<_DestinationPickerSheet> {
               ),
             ),
           ),
+          if (_suggestions.isNotEmpty)
+            Material(
+              color: AppColors.surface,
+              child: Column(
+                children: _suggestions.map((suggestion) => ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.place_outlined, color: AppColors.amber),
+                  title: Text(suggestion['display_name'] as String, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  onTap: () {
+                    widget.onConfirm(
+                      suggestion['display_name'] as String,
+                      LatLng(
+                        double.parse(suggestion['lat'] as String),
+                        double.parse(suggestion['lon'] as String),
+                      ),
+                    );
+                  },
+                )).toList(),
+              ),
+            ),
           const SizedBox(height: 20),
           Text(
             'Where are you going?',
@@ -879,45 +944,6 @@ class _DestinationPickerSheetState extends State<_DestinationPickerSheet> {
   }
 }
 
-class _SafetyLayerTile extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  const _SafetyLayerTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(vertical: 8),
-    child: Row(
-      children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: AppColors.amber.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, size: 17, color: AppColors.amber),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: AppTextStyles.body(fontSize: 13, fontWeight: FontWeight.w600)),
-              Text(subtitle, style: AppTextStyles.body(fontSize: 11, color: AppColors.faint)),
-            ],
-          ),
-        ),
-      ],
-    ),
-  );
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 //  Pod View — live GPS, real destination, no fake companions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -928,6 +954,7 @@ class PodView extends StatefulWidget {
   final bool audioEnabled;
   final String destinationName;
   final LatLng? destinationLatLng;
+  final String? trackingToken;
 
   const PodView({
     super.key,
@@ -936,6 +963,7 @@ class PodView extends StatefulWidget {
     required this.audioEnabled,
     required this.destinationName,
     required this.destinationLatLng,
+    this.trackingToken,
   });
 
   @override
@@ -946,6 +974,7 @@ class _PodViewState extends State<PodView> {
   final _locationService = LocationService();
   LatLng? _currentLocation;
   StreamSubscription<LatLng>? _locationSub;
+  Timer? _telemetryTimer;
   DateTime? _commuteStartTime;
 
   @override
@@ -962,11 +991,37 @@ class _PodViewState extends State<PodView> {
     _locationSub = _locationService.locationStream.listen((loc) {
       if (mounted) setState(() => _currentLocation = loc);
     });
+    if (widget.trackingToken != null) {
+      _startTelemetry(widget.trackingToken!, loc);
+    }
+  }
+
+  void _startTelemetry(String trackingToken, LatLng fallback) {
+    if (_telemetryTimer != null) return;
+    final socket = LiveLocationSocketService();
+    socket.connect();
+    socket.joinTrackingRoom(trackingToken);
+    _telemetryTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      final current = _currentLocation ?? fallback;
+      socket.sendTelemetry(
+        trackingToken: trackingToken, incidentId: null,
+        lat: current.latitude, lng: current.longitude,
+      );
+    });
+  }
+
+  @override
+  void didUpdateWidget(covariant PodView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.trackingToken == null && widget.trackingToken != null) {
+      _startTelemetry(widget.trackingToken!, _currentLocation ?? LocationService.defaultLocation);
+    }
   }
 
   @override
   void dispose() {
     _locationSub?.cancel();
+    _telemetryTimer?.cancel();
     _locationService.dispose();
     super.dispose();
   }
@@ -1147,8 +1202,18 @@ class SosTriggerView extends StatefulWidget {
 
 class _SosTriggerViewState extends State<SosTriggerView> {
   Timer? _timer;
+  StreamSubscription<AccelerometerEvent>? _shakeSubscription;
   double _progress = 0;
   DateTime? _started;
+
+  @override
+  void initState() {
+    super.initState();
+    _shakeSubscription = accelerometerEventStream().listen((event) {
+      final force = event.x * event.x + event.y * event.y + event.z * event.z;
+      if (force > 55 && mounted) widget.onActivate();
+    });
+  }
 
   void _startHold() {
     _started = DateTime.now();
@@ -1171,6 +1236,7 @@ class _SosTriggerViewState extends State<SosTriggerView> {
   @override
   void dispose() {
     _stopHold();
+    _shakeSubscription?.cancel();
     super.dispose();
   }
 
@@ -1268,7 +1334,9 @@ class _SosTriggerViewState extends State<SosTriggerView> {
 
 class SosActiveView extends StatefulWidget {
   final VoidCallback onResolve;
-  const SosActiveView({super.key, required this.onResolve});
+  final String triggerType;
+  final double confidenceScore;
+  const SosActiveView({super.key, required this.onResolve, this.triggerType = 'MANUAL_SOS', this.confidenceScore = 1.0});
 
   @override
   State<SosActiveView> createState() => _SosActiveViewState();
@@ -1311,31 +1379,36 @@ class _SosActiveViewState extends State<SosActiveView> {
 
     try {
       final res = await SosApiService.triggerSos(
-        triggerType: 'MANUAL_SOS',
+        triggerType: widget.triggerType,
         lat: loc.latitude,
         lng: loc.longitude,
+        confidenceScore: widget.confidenceScore,
       );
 
       _incidentId = res.incidentId;
       _trackingToken = res.trackingToken;
 
+      if (kDebugMode) {
+        print('SOS alert dispatched. Tracking location from $_currentLocation');
+      }
+
       _socketService.connect();
       _socketService.joinTrackingRoom(_trackingToken!);
 
-      // Stream live telemetry packet every 3 seconds with real location
-      _telemetryTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      void sendCurrentLocation() {
         final currentLoc = _currentLocation ?? loc;
-        if (_trackingToken != null && _incidentId != null) {
-          _socketService.sendTelemetry(
-            trackingToken: _trackingToken!,
-            incidentId: _incidentId!,
-            lat: currentLoc.latitude,
-            lng: currentLoc.longitude,
-            speed: 0.0,
-            batteryLevel: 100,
-          );
-        }
-      });
+        _socketService.sendTelemetry(
+          trackingToken: _trackingToken!,
+          incidentId: _incidentId!,
+          lat: currentLoc.latitude,
+          lng: currentLoc.longitude,
+          speed: 0.0,
+          batteryLevel: 100,
+        );
+      }
+
+      sendCurrentLocation();
+      _telemetryTimer = Timer.periodic(const Duration(seconds: 3), (_) => sendCurrentLocation());
     } catch (e) {
       if (kDebugMode) print('SOS API dispatch note: $e');
     }
@@ -1433,7 +1506,7 @@ class _SosActiveViewState extends State<SosActiveView> {
                     label: 'Call 112 now',
                     icon: Icons.phone_in_talk_rounded,
                     color: AppColors.coral,
-                    onPressed: () {},
+                    onPressed: () => launchUrl(Uri(scheme: 'tel', path: '112')),
                   ),
                   const SizedBox(height: 10),
                   OutlinedButton(
@@ -2122,7 +2195,7 @@ class _SettingsViewState extends State<SettingsView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Safety settings', style: AppTextStyles.display(fontSize: 19)),
+          Text('Account & settings', style: AppTextStyles.display(fontSize: 19)),
           const SizedBox(height: 16),
           _Panel(
             child: Column(

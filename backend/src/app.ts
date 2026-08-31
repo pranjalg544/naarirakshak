@@ -1,8 +1,8 @@
 import express from 'express';
+import 'dotenv/config';
 import http from 'http';
 import path from 'path';
 import cors from 'cors';
-import dotenv from 'dotenv';
 import { Server } from 'socket.io';
 
 import { pool } from './config/db';
@@ -11,8 +11,6 @@ import contactsRoutes from './routes/contacts_routes';
 import commuteRoutes from './routes/commute_routes';
 import sosRoutes from './routes/sos_routes';
 import { setupLiveLocationSockets } from './websockets/live_location_socket';
-
-dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
