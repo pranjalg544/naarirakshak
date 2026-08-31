@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
-import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/theme/app_theme.dart';
 import 'core/widgets/auto_sos_overlay.dart';
@@ -14,6 +15,7 @@ import 'core/widgets/open_street_map_widget.dart';
 import 'services/audio_detection_service.dart';
 import 'services/auth_api_service.dart';
 import 'services/contacts_api_service.dart';
+import 'services/location_service.dart';
 import 'services/sos_api_service.dart';
 import 'services/live_location_socket_service.dart';
 
@@ -56,6 +58,14 @@ class _SafetyShellState extends State<SafetyShell> {
   AppScreen _screen = AppScreen.onboarding;
   AppScreen _previousScreen = AppScreen.home;
   String _userName = '';
+
+  // Destination chosen by the user before commute
+  String _destinationName = '';
+  LatLng? _destinationLatLng;
+
+  // Primary contact name (for DecoyView)
+  String _primaryContactName = '';
+
   final _audioService = AudioDetectionService();
   bool _audioEnabled = true;
   double _triggerConfidence = 0.85;
@@ -114,6 +124,20 @@ class _SafetyShellState extends State<SafetyShell> {
     );
   }
 
+  /// Called when user selects a destination on the home screen.
+  void _startCommuteWithDestination(String name, LatLng latLng) {
+    setState(() {
+      _destinationName = name;
+      _destinationLatLng = latLng;
+    });
+    _goTo(AppScreen.pod);
+  }
+
+  /// Called from ContactsView when the primary contact changes.
+  void _onPrimaryContactChanged(String name) {
+    setState(() => _primaryContactName = name);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -162,21 +186,30 @@ class _SafetyShellState extends State<SafetyShell> {
     ),
     AppScreen.home => HomeView(
       userName: _userName,
-      onStartCommute: () => _goTo(AppScreen.pod),
+      onStartCommute: _startCommuteWithDestination,
     ),
     AppScreen.pod => PodView(
       audioService: _audioService,
       audioEnabled: _audioEnabled,
+      destinationName: _destinationName,
+      destinationLatLng: _destinationLatLng,
       onReached: () {
         _audioService.stopListening();
+        setState(() {
+          _destinationName = '';
+          _destinationLatLng = null;
+        });
         _goTo(AppScreen.home);
       },
     ),
-    AppScreen.contacts => const ContactsView(),
+    AppScreen.contacts => ContactsView(
+      onPrimaryContactChanged: _onPrimaryContactChanged,
+    ),
     AppScreen.settings => SettingsView(
       audioEnabled: _audioEnabled,
       onAudioToggle: (val) => setState(() => _audioEnabled = val),
       audioService: _audioService,
+      onNavigateContacts: () => _goTo(AppScreen.contacts),
     ),
     AppScreen.sos => SosTriggerView(
       onActivate: () => _goTo(AppScreen.sosActive),
@@ -186,7 +219,10 @@ class _SafetyShellState extends State<SafetyShell> {
     AppScreen.sosActive => SosActiveView(
       onResolve: () => _goTo(AppScreen.home),
     ),
-    AppScreen.decoy => DecoyView(onBack: () => _goTo(AppScreen.sos)),
+    AppScreen.decoy => DecoyView(
+      primaryContactName: _primaryContactName,
+      onBack: () => _goTo(AppScreen.sos),
+    ),
     AppScreen.autoSosCountdown => AutoSosOverlay(
       confidence: _triggerConfidence,
       onCancel: () {
@@ -200,6 +236,10 @@ class _SafetyShellState extends State<SafetyShell> {
     ),
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Status Bar
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _StatusBar extends StatelessWidget {
   @override
@@ -222,6 +262,10 @@ class _StatusBar extends StatelessWidget {
     ),
   );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Onboarding View
+// ─────────────────────────────────────────────────────────────────────────────
 
 class OnboardingView extends StatelessWidget {
   final VoidCallback onStart;
@@ -304,6 +348,10 @@ class _FeatureIcon extends StatelessWidget {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Auth View
+// ─────────────────────────────────────────────────────────────────────────────
+
 class AuthView extends StatefulWidget {
   final VoidCallback onBack;
   final ValueChanged<String> onAuthenticated;
@@ -324,6 +372,7 @@ class _AuthViewState extends State<AuthView> {
   final _passwordController = TextEditingController();
   bool _isSignUp = false;
   bool _obscurePassword = true;
+  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -332,8 +381,6 @@ class _AuthViewState extends State<AuthView> {
     _passwordController.dispose();
     super.dispose();
   }
-
-  bool _isLoading = false;
 
   Future<void> _submit() async {
     if (_formKey.currentState!.validate()) {
@@ -450,7 +497,7 @@ class _AuthViewState extends State<AuthView> {
               keyboardType: TextInputType.emailAddress,
               validator: (v) {
                 if (_required(v, 'Email') != null) return _required(v, 'Email');
-                return RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(v!.trim())
+                return RegExp(r'^[^\@\s]+@[^\@\s]+\.[^\@\s]+$').hasMatch(v!.trim())
                     ? null
                     : 'Enter a valid email';
               },
@@ -483,7 +530,7 @@ class _AuthViewState extends State<AuthView> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: _noop,
+                  onPressed: () {},
                   child: Text(
                     'Forgot password?',
                     style: AppTextStyles.body(
@@ -506,7 +553,7 @@ class _AuthViewState extends State<AuthView> {
             const SizedBox(height: 20),
             _PrimaryButton(
               label: _isLoading ? 'Connecting...' : (_isSignUp ? 'Create account' : 'Sign in'),
-              onPressed: _isLoading ? _noop : _submit,
+              onPressed: _isLoading ? () {} : _submit,
             ),
             const SizedBox(height: 18),
             Center(
@@ -585,25 +632,57 @@ class _AuthField extends StatelessWidget {
   );
 }
 
-class HomeView extends StatelessWidget {
+// ─────────────────────────────────────────────────────────────────────────────
+//  Home View — no fake data, user picks destination
+// ─────────────────────────────────────────────────────────────────────────────
+
+class HomeView extends StatefulWidget {
   final String userName;
-  final VoidCallback onStartCommute;
+  final void Function(String name, LatLng latLng) onStartCommute;
   const HomeView({
     super.key,
     required this.userName,
     required this.onStartCommute,
   });
+
+  @override
+  State<HomeView> createState() => _HomeViewState();
+}
+
+class _HomeViewState extends State<HomeView> {
+  /// Returns a friendly greeting based on the current hour.
+  String _greeting() {
+    final hour = DateTime.now().hour;
+    if (hour < 12) return 'Good morning,';
+    if (hour < 17) return 'Good afternoon,';
+    return 'Good evening,';
+  }
+
+  void _openDestinationPicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _DestinationPickerSheet(
+        onConfirm: (name, latLng) {
+          Navigator.of(ctx).pop();
+          widget.onStartCommute(name, latLng);
+        },
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) => _Page(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'Good evening,',
+          _greeting(),
           style: AppTextStyles.body(fontSize: 12.5, color: AppColors.faint),
         ),
         Text(
-          userName.isEmpty ? 'Welcome' : userName,
+          widget.userName.isEmpty ? 'Welcome' : widget.userName,
           style: AppTextStyles.display(fontSize: 22),
         ),
         const SizedBox(height: 22),
@@ -628,209 +707,431 @@ class HomeView extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 18),
-              const _InfoLine(
-                icon: Icons.location_on_outlined,
-                text: 'Kalkaji → Cyber Hub, Gurugram',
+              const SizedBox(height: 14),
+              Text(
+                'Tap "Start commute" to choose your destination. Your live location will be tracked throughout.',
+                style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
               ),
-              const _InfoLine(
-                icon: Icons.access_time_rounded,
-                text: 'Est. 38 min · Auto + Metro',
-                mono: true,
-              ),
-              const SizedBox(height: 12),
-              // OpenStreetMap Route Preview Snippet
+              const SizedBox(height: 14),
+              // Live GPS map — no fake route/destination, just user's real location
               const OpenStreetMapWidget(
-                center: LatLng(28.5350, 77.2200),
-                zoom: 11.5,
-                height: 130,
+                center: LocationService.defaultLocation,
+                zoom: 13.5,
+                height: 150,
                 interactive: false,
-                titleLabel: 'OSM Route Preview',
+                useLiveGps: true,
+                titleLabel: 'Your location · OSM',
               ),
               const SizedBox(height: 14),
               _PrimaryButton(
                 label: 'Start commute',
                 icon: Icons.navigation_rounded,
-                onPressed: onStartCommute,
+                onPressed: _openDestinationPicker,
               ),
             ],
           ),
         ),
         const SizedBox(height: 20),
-        const Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            _Stat(value: '47', label: 'safe arrivals'),
-            _Stat(value: '312 km', label: 'protected this month'),
-            _Stat(value: '6', label: 'pod companions'),
-          ],
-        ),
-        const SizedBox(height: 22),
-        Text(
-          'YOUR THREE LAYERS',
-          style: AppTextStyles.body(fontSize: 11.5, color: AppColors.faint),
-        ),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: const [
-            _LayerChip(label: 'Pod matching', icon: Icons.people_alt_outlined),
-            _LayerChip(label: 'Silent SOS armed', icon: Icons.radio_outlined),
-            _LayerChip(label: 'Audio detection', icon: Icons.mic_none_rounded),
-          ],
+        _Panel(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'YOUR SAFETY LAYERS',
+                style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
+              ),
+              const SizedBox(height: 14),
+              _SafetyLayerTile(
+                icon: Icons.people_alt_outlined,
+                title: 'Pod matching',
+                subtitle: 'Auto-matched with others on similar routes',
+              ),
+              _SafetyLayerTile(
+                icon: Icons.radio_outlined,
+                title: 'Silent SOS',
+                subtitle: 'Press & hold the red button to trigger',
+              ),
+              _SafetyLayerTile(
+                icon: Icons.mic_none_rounded,
+                title: 'Audio detection',
+                subtitle: 'On-device AI listens during active commutes',
+              ),
+            ],
+          ),
         ),
       ],
     ),
   );
 }
 
-class PodView extends StatelessWidget {
+/// Bottom sheet for the user to type where they are heading.
+class _DestinationPickerSheet extends StatefulWidget {
+  final void Function(String name, LatLng latLng) onConfirm;
+  const _DestinationPickerSheet({required this.onConfirm});
+
+  @override
+  State<_DestinationPickerSheet> createState() => _DestinationPickerSheetState();
+}
+
+class _DestinationPickerSheetState extends State<_DestinationPickerSheet> {
+  final _controller = TextEditingController();
+  bool _hasInput = false;
+
+  /// Simple geocode-style suggestions (user can type freely — we use the
+  /// text as the destination label and derive a mock LatLng offset from
+  /// the user's live GPS as a placeholder until a real geocoding API is added).
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(() {
+      setState(() => _hasInput = _controller.text.trim().isNotEmpty);
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _confirm() {
+    final name = _controller.text.trim();
+    if (name.isEmpty) return;
+    // Use a slight offset from the default location as a stand-in destination
+    // until a geocoding integration (e.g. Nominatim) is added.
+    final destinationLatLng = LatLng(
+      LocationService.defaultLocation.latitude + 0.05,
+      LocationService.defaultLocation.longitude + 0.10,
+    );
+    widget.onConfirm(name, destinationLatLng);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    return Container(
+      padding: EdgeInsets.fromLTRB(24, 24, 24, 24 + bottom),
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Where are you going?',
+            style: AppTextStyles.display(fontSize: 19, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Your live location will be tracked throughout your commute.',
+            style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
+          ),
+          const SizedBox(height: 18),
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            style: AppTextStyles.body(fontSize: 14),
+            textCapitalization: TextCapitalization.words,
+            decoration: InputDecoration(
+              hintText: 'e.g. Cyber Hub, Gurugram',
+              hintStyle: AppTextStyles.body(fontSize: 13, color: AppColors.faint),
+              prefixIcon: const Icon(Icons.location_on_outlined, color: AppColors.amber, size: 20),
+              filled: true,
+              fillColor: AppColors.bg,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: AppColors.border),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+                borderSide: const BorderSide(color: AppColors.amber, width: 1.5),
+              ),
+            ),
+            onSubmitted: (_) => _hasInput ? _confirm() : null,
+          ),
+          const SizedBox(height: 16),
+          _PrimaryButton(
+            label: 'Start commute',
+            icon: Icons.navigation_rounded,
+            onPressed: _hasInput ? _confirm : () {},
+          ),
+          const SizedBox(height: 4),
+        ],
+      ),
+    );
+  }
+}
+
+class _SafetyLayerTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  const _SafetyLayerTile({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+  });
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
+    child: Row(
+      children: [
+        Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: AppColors.amber.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(icon, size: 17, color: AppColors.amber),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: AppTextStyles.body(fontSize: 13, fontWeight: FontWeight.w600)),
+              Text(subtitle, style: AppTextStyles.body(fontSize: 11, color: AppColors.faint)),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Pod View — live GPS, real destination, no fake companions
+// ─────────────────────────────────────────────────────────────────────────────
+
+class PodView extends StatefulWidget {
   final VoidCallback onReached;
   final AudioDetectionService audioService;
   final bool audioEnabled;
+  final String destinationName;
+  final LatLng? destinationLatLng;
 
   const PodView({
     super.key,
     required this.onReached,
     required this.audioService,
     required this.audioEnabled,
+    required this.destinationName,
+    required this.destinationLatLng,
   });
 
   @override
-  Widget build(BuildContext context) => _Page(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text('Your safety pod', style: AppTextStyles.display(fontSize: 19)),
-            if (audioEnabled)
-              StreamBuilder<AudioDetectionSnapshot>(
-                stream: audioService.snapshots,
-                builder: (context, snapshot) {
-                  final data = snapshot.data;
-                  final isListening = data?.state == DetectionState.listening ||
-                      data?.state == DetectionState.detecting;
-                  final isDetecting = data?.state == DetectionState.detecting;
+  State<PodView> createState() => _PodViewState();
+}
 
-                  return Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: isDetecting
-                          ? AppColors.coral.withValues(alpha: 0.15)
-                          : AppColors.amber.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: isDetecting ? AppColors.coral : AppColors.amber,
-                        width: 1,
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isDetecting ? Icons.graphic_eq : Icons.mic_rounded,
-                          size: 13,
+class _PodViewState extends State<PodView> {
+  final _locationService = LocationService();
+  LatLng? _currentLocation;
+  StreamSubscription<LatLng>? _locationSub;
+  DateTime? _commuteStartTime;
+
+  @override
+  void initState() {
+    super.initState();
+    _commuteStartTime = DateTime.now();
+    _initLocation();
+  }
+
+  Future<void> _initLocation() async {
+    final loc = await _locationService.getCurrentLocation();
+    if (mounted) setState(() => _currentLocation = loc);
+    _locationService.startTracking();
+    _locationSub = _locationService.locationStream.listen((loc) {
+      if (mounted) setState(() => _currentLocation = loc);
+    });
+  }
+
+  @override
+  void dispose() {
+    _locationSub?.cancel();
+    _locationService.dispose();
+    super.dispose();
+  }
+
+  String _elapsedTime() {
+    if (_commuteStartTime == null) return '0 min';
+    final diff = DateTime.now().difference(_commuteStartTime!);
+    final mins = diff.inMinutes;
+    if (mins < 60) return '$mins min elapsed';
+    return '${diff.inHours}h ${mins % 60}min elapsed';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mapCenter = _currentLocation ?? LocationService.defaultLocation;
+    final destination = widget.destinationLatLng;
+
+    // Build route points: current location → destination (if set)
+    final routePoints = destination != null ? [mapCenter, destination] : null;
+
+    return _Page(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Commute active', style: AppTextStyles.display(fontSize: 19)),
+              if (widget.audioEnabled)
+                StreamBuilder<AudioDetectionSnapshot>(
+                  stream: widget.audioService.snapshots,
+                  builder: (context, snapshot) {
+                    final data = snapshot.data;
+                    final isListening = data?.state == DetectionState.listening ||
+                        data?.state == DetectionState.detecting;
+                    final isDetecting = data?.state == DetectionState.detecting;
+
+                    return Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: isDetecting
+                            ? AppColors.coral.withValues(alpha: 0.15)
+                            : AppColors.amber.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
                           color: isDetecting ? AppColors.coral : AppColors.amber,
+                          width: 1,
                         ),
-                        const SizedBox(width: 5),
-                        Text(
-                          isDetecting
-                              ? 'Distress sound?'
-                              : (isListening ? 'AI Listening' : 'Audio Standby'),
-                          style: AppTextStyles.mono(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            isDetecting ? Icons.graphic_eq : Icons.mic_rounded,
+                            size: 13,
                             color: isDetecting ? AppColors.coral : AppColors.amber,
                           ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-          ],
-        ),
-        Text(
-          'Matched by route · 4 of 5 checked in',
-          style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
-        ),
-        const SizedBox(height: 14),
-        // OpenStreetMap Interactive Commute Map
-        OpenStreetMapWidget(
-          center: const LatLng(28.5350, 77.2200),
-          zoom: 12.5,
-          height: 180,
-          titleLabel: 'Pod Commute Route · OSM',
-          extraMarkers: [
-            // Companion RS marker
-            Marker(
-              point: const LatLng(28.5245, 77.2066),
-              width: 28,
-              height: 28,
-              child: CircleAvatar(
-                backgroundColor: AppColors.surface,
-                child: Text('RS', style: AppTextStyles.mono(fontSize: 10, fontWeight: FontWeight.w700)),
-              ),
-            ),
-            // Companion TN marker
-            Marker(
-              point: const LatLng(28.5150, 77.1850),
-              width: 28,
-              height: 28,
-              child: CircleAvatar(
-                backgroundColor: AppColors.amber,
-                child: Text('TN', style: AppTextStyles.mono(fontSize: 10, fontWeight: FontWeight.w700, color: AppColors.bgDeep)),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              'ETA 14:32 · 38 min remaining',
-              style: AppTextStyles.mono(fontSize: 11.5, color: AppColors.amber, fontWeight: FontWeight.w600),
-            ),
-            Text(
-              'Live location shared with pod',
-              style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
-            ),
-          ],
-        ),
-        const SizedBox(height: 14),
-        _Panel(
-          child: Column(
-            children: const [
-              _PodMember(initials: 'RS', reached: true),
-              _PodMember(initials: 'MK', reached: true),
-              _PodMember(initials: 'PJ', reached: true),
-              _PodMember(initials: 'TN', reached: false),
+                          const SizedBox(width: 5),
+                          Text(
+                            isDetecting
+                                ? 'Distress sound?'
+                                : (isListening ? 'AI Listening' : 'Audio Standby'),
+                            style: AppTextStyles.mono(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                              color: isDetecting ? AppColors.coral : AppColors.amber,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
             ],
           ),
-        ),
-        const SizedBox(height: 18),
-        _PrimaryButton(
-          label: "I've reached safely",
-          icon: Icons.check_rounded,
-          color: AppColors.green,
-          onPressed: onReached,
-        ),
-        const SizedBox(height: 10),
-        Center(
-          child: Text(
-            'Missed check-ins auto-alert your pod and emergency contacts.',
-            textAlign: TextAlign.center,
-            style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+          const SizedBox(height: 4),
+          if (widget.destinationName.isNotEmpty)
+            Row(
+              children: [
+                const Icon(Icons.navigation_rounded, size: 13, color: AppColors.amber),
+                const SizedBox(width: 5),
+                Expanded(
+                  child: Text(
+                    'To: ${widget.destinationName}',
+                    style: AppTextStyles.body(fontSize: 12, color: AppColors.muted),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          const SizedBox(height: 4),
+          Text(
+            _elapsedTime(),
+            style: AppTextStyles.mono(fontSize: 11, color: AppColors.amber, fontWeight: FontWeight.w600),
           ),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 12),
+          // Live GPS commute map
+          OpenStreetMapWidget(
+            center: mapCenter,
+            zoom: 14.5,
+            height: 210,
+            useLiveGps: true,
+            routePoints: routePoints,
+            titleLabel: 'Live GPS · OSM',
+          ),
+          const SizedBox(height: 12),
+          _Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: AppColors.green,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Live location sharing active',
+                      style: AppTextStyles.body(fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (_currentLocation != null)
+                  Text(
+                    '${_currentLocation!.latitude.toStringAsFixed(5)}°N, ${_currentLocation!.longitude.toStringAsFixed(5)}°E',
+                    style: AppTextStyles.mono(fontSize: 10, color: AppColors.faint),
+                  ),
+                const SizedBox(height: 4),
+                Text(
+                  'Emergency contacts & pod can see your real-time position.',
+                  style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _PrimaryButton(
+            label: "I've reached safely",
+            icon: Icons.check_rounded,
+            color: AppColors.green,
+            onPressed: widget.onReached,
+          ),
+          const SizedBox(height: 10),
+          Center(
+            child: Text(
+              'Missed check-ins auto-alert your emergency contacts.',
+              textAlign: TextAlign.center,
+              style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  SOS Trigger View
+// ─────────────────────────────────────────────────────────────────────────────
 
 class SosTriggerView extends StatefulWidget {
   final VoidCallback onActivate, onDecoy, onCancel;
@@ -939,7 +1240,7 @@ class _SosTriggerViewState extends State<SosTriggerView> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Shares live location, audio and alerts your pod, contacts and control room',
+                  'Shares live location, audio and alerts your emergency contacts',
                   textAlign: TextAlign.center,
                   style: AppTextStyles.body(
                     fontSize: 11,
@@ -961,6 +1262,10 @@ class _SosTriggerViewState extends State<SosTriggerView> {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  SOS Active View — uses real GPS coordinates
+// ─────────────────────────────────────────────────────────────────────────────
+
 class SosActiveView extends StatefulWidget {
   final VoidCallback onResolve;
   const SosActiveView({super.key, required this.onResolve});
@@ -973,23 +1278,42 @@ class _SosActiveViewState extends State<SosActiveView> {
   String? _incidentId;
   String? _trackingToken;
   Timer? _telemetryTimer;
+  Timer? _elapsedTimer;
   final _socketService = LiveLocationSocketService();
+  final _locationService = LocationService();
+
+  LatLng? _currentLocation;
+  StreamSubscription<LatLng>? _locationSub;
+  Duration _elapsed = Duration.zero;
+  final _startTime = DateTime.now();
 
   @override
   void initState() {
     super.initState();
+    _elapsedTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() => _elapsed = DateTime.now().difference(_startTime));
+      }
+    });
     _triggerSosAndStartTelemetry();
   }
 
   Future<void> _triggerSosAndStartTelemetry() async {
-    try {
-      const lat = 28.5350;
-      const lng = 77.2200;
+    // Get real GPS coordinates
+    final loc = await _locationService.getCurrentLocation();
+    if (mounted) setState(() => _currentLocation = loc);
 
+    // Start continuous tracking
+    _locationService.startTracking();
+    _locationSub = _locationService.locationStream.listen((newLoc) {
+      if (mounted) setState(() => _currentLocation = newLoc);
+    });
+
+    try {
       final res = await SosApiService.triggerSos(
         triggerType: 'MANUAL_SOS',
-        lat: lat,
-        lng: lng,
+        lat: loc.latitude,
+        lng: loc.longitude,
       );
 
       _incidentId = res.incidentId;
@@ -998,16 +1322,17 @@ class _SosActiveViewState extends State<SosActiveView> {
       _socketService.connect();
       _socketService.joinTrackingRoom(_trackingToken!);
 
-      // Stream live telemetry packet every 3 seconds
+      // Stream live telemetry packet every 3 seconds with real location
       _telemetryTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+        final currentLoc = _currentLocation ?? loc;
         if (_trackingToken != null && _incidentId != null) {
           _socketService.sendTelemetry(
             trackingToken: _trackingToken!,
             incidentId: _incidentId!,
-            lat: lat,
-            lng: lng,
-            speed: 1.2,
-            batteryLevel: 85,
+            lat: currentLoc.latitude,
+            lng: currentLoc.longitude,
+            speed: 0.0,
+            batteryLevel: 100,
           );
         }
       });
@@ -1018,6 +1343,7 @@ class _SosActiveViewState extends State<SosActiveView> {
 
   Future<void> _handleResolve() async {
     _telemetryTimer?.cancel();
+    _elapsedTimer?.cancel();
     if (_incidentId != null) {
       try {
         await SosApiService.resolveSos(_incidentId!);
@@ -1029,197 +1355,231 @@ class _SosActiveViewState extends State<SosActiveView> {
     widget.onResolve();
   }
 
+  String _formatElapsed() {
+    final m = _elapsed.inMinutes.toString().padLeft(2, '0');
+    final s = (_elapsed.inSeconds % 60).toString().padLeft(2, '0');
+    return 'Live for $m:$s';
+  }
+
   @override
   void dispose() {
     _telemetryTimer?.cancel();
+    _elapsedTimer?.cancel();
+    _locationSub?.cancel();
+    _locationService.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => Container(
-    decoration: const BoxDecoration(
-      gradient: LinearGradient(
-        begin: Alignment.topCenter,
-        end: Alignment.bottomCenter,
-        colors: [Color(0xFFFCE7E7), AppColors.bg],
+  Widget build(BuildContext context) {
+    final mapCenter = _currentLocation ?? LocationService.defaultLocation;
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Color(0xFFFCE7E7), AppColors.bg],
+        ),
       ),
-    ),
-    child: SingleChildScrollView(
-      child: Column(
-        children: [
-          const SizedBox(height: 32),
-          const BeaconRing(size: 92, color: AppColors.coral),
-          const SizedBox(height: 12),
-          Text(
-            'Alert sent',
-            style: AppTextStyles.display(
-              fontSize: 19,
-              fontWeight: FontWeight.w700,
+      child: SingleChildScrollView(
+        child: Column(
+          children: [
+            const SizedBox(height: 32),
+            const BeaconRing(size: 92, color: AppColors.coral),
+            const SizedBox(height: 12),
+            Text(
+              'Alert sent',
+              style: AppTextStyles.display(
+                fontSize: 19,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          Text(
-            'Live for 02:14',
-            style: AppTextStyles.mono(fontSize: 11, color: AppColors.coral),
-          ),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: OpenStreetMapWidget(
-              center: const LatLng(28.5350, 77.2200),
-              zoom: 14.5,
-              height: 190,
-              isSosActive: true,
-              titleLabel: 'LIVE EMERGENCY BEACON · OSM',
+            Text(
+              _formatElapsed(),
+              style: AppTextStyles.mono(fontSize: 11, color: AppColors.coral),
             ),
-          ),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _Panel(
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: OpenStreetMapWidget(
+                center: mapCenter,
+                zoom: 14.5,
+                height: 190,
+                isSosActive: true,
+                useLiveGps: true,
+                titleLabel: 'LIVE EMERGENCY BEACON · OSM',
+              ),
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _Panel(
+                child: Column(
+                  children: const [
+                    _AlertRow('Pod notified', true),
+                    _AlertRow('Emergency contacts notified', true),
+                    _AlertRow('Live location sharing', true),
+                    _AlertRow('Control room (112) pinged', true),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
               child: Column(
-                children: const [
-                  _AlertRow('Pod notified', true),
-                  _AlertRow('Emergency contacts notified', true),
-                  _AlertRow('Live location sharing', true),
-                  _AlertRow('Control room (112) pinged', true),
+                children: [
+                  _PrimaryButton(
+                    label: 'Call 112 now',
+                    icon: Icons.phone_in_talk_rounded,
+                    color: AppColors.coral,
+                    onPressed: () {},
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton(
+                    onPressed: _handleResolve,
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(48),
+                      foregroundColor: AppColors.muted,
+                      side: const BorderSide(color: AppColors.border),
+                    ),
+                    child: Text(
+                      "I'm safe — cancel alert",
+                      style: AppTextStyles.body(fontSize: 13.5),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ),
-          const SizedBox(height: 16),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              children: [
-                _PrimaryButton(
-                  label: 'Call 112 now',
-                  icon: Icons.phone_in_talk_rounded,
-                  color: AppColors.coral,
-                  onPressed: _noop,
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton(
-                  onPressed: _handleResolve,
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size.fromHeight(48),
-                    foregroundColor: AppColors.muted,
-                    side: const BorderSide(color: AppColors.border),
-                  ),
-                  child: Text(
-                    "I'm safe — cancel alert",
-                    style: AppTextStyles.body(fontSize: 13.5),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+            const SizedBox(height: 24),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
-void _noop() {}
+// ─────────────────────────────────────────────────────────────────────────────
+//  Decoy View — uses real primary contact name
+// ─────────────────────────────────────────────────────────────────────────────
 
 class DecoyView extends StatelessWidget {
   final VoidCallback onBack;
-  const DecoyView({super.key, required this.onBack});
+  final String primaryContactName;
+  const DecoyView({
+    super.key,
+    required this.onBack,
+    this.primaryContactName = '',
+  });
+
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onDoubleTap: onBack,
-    child: Container(
-      color: const Color(0xFF0B0B10),
-      child: SingleChildScrollView(
-        child: SizedBox(
-          height: MediaQuery.of(context).size.height,
-          child: Column(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'double-tap to exit preview',
-                style: AppTextStyles.mono(
-                  fontSize: 10,
-                  color: const Color(0xFF555555),
-                ),
-              ),
-              IconButton(
-                onPressed: onBack,
-                icon: const Icon(
-                  Icons.close,
-                  color: Color(0xFF666666),
-                  size: 16,
-                ),
-              ),
-            ],
-          ),
-          Column(
-            children: [
-              Container(
-                width: 92,
-                height: 92,
-                decoration: const BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color(0xFF2A2A32),
-                ),
-                child: Center(
-                  child: Text(
-                    'M',
-                    style: AppTextStyles.display(
-                      fontSize: 30,
-                      color: const Color(0xFF999999),
+  Widget build(BuildContext context) {
+    final displayName = primaryContactName.isNotEmpty
+        ? primaryContactName.split(' ').first
+        : 'Contact';
+    final initial = displayName.isNotEmpty ? displayName[0].toUpperCase() : 'C';
+
+    return GestureDetector(
+      onDoubleTap: onBack,
+      child: Container(
+        color: const Color(0xFF0B0B10),
+        child: SingleChildScrollView(
+          child: SizedBox(
+            height: MediaQuery.of(context).size.height,
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'double-tap to exit preview',
+                      style: AppTextStyles.mono(
+                        fontSize: 10,
+                        color: const Color(0xFF555555),
+                      ),
                     ),
+                    IconButton(
+                      onPressed: onBack,
+                      icon: const Icon(
+                        Icons.close,
+                        color: Color(0xFF666666),
+                        size: 16,
+                      ),
+                    ),
+                  ],
+                ),
+                Column(
+                  children: [
+                    Container(
+                      width: 92,
+                      height: 92,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF2A2A32),
+                      ),
+                      child: Center(
+                        child: Text(
+                          initial,
+                          style: AppTextStyles.display(
+                            fontSize: 30,
+                            color: const Color(0xFF999999),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    Text(
+                      displayName,
+                      style: AppTextStyles.body(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white,
+                      ),
+                    ),
+                    Text(
+                      'mobile · calling…',
+                      style: AppTextStyles.body(
+                        fontSize: 12.5,
+                        color: const Color(0xFF888888),
+                      ),
+                    ),
+                  ],
+                ),
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 30),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: const [
+                      _CallAction(
+                        icon: Icons.call_end,
+                        label: 'Decline',
+                        color: Color(0xFFE5484D),
+                      ),
+                      _CallAction(
+                        icon: Icons.phone,
+                        label: 'Accept',
+                        color: Color(0xFF30C85E),
+                      ),
+                    ],
                   ),
-                ),
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'Mom',
-                style: AppTextStyles.body(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                ),
-              ),
-              Text(
-                'mobile · calling…',
-                style: AppTextStyles.body(
-                  fontSize: 12.5,
-                  color: const Color(0xFF888888),
-                ),
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.only(bottom: 30),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: const [
-                _CallAction(
-                  icon: Icons.call_end,
-                  label: 'Decline',
-                  color: Color(0xFFE5484D),
-                ),
-                _CallAction(
-                  icon: Icons.phone,
-                  label: 'Accept',
-                  color: Color(0xFF30C85E),
                 ),
               ],
             ),
           ),
-        ],
-      ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Contacts View — real CRUD with form dialog, swipe-to-delete, empty state
+// ─────────────────────────────────────────────────────────────────────────────
+
 class ContactsView extends StatefulWidget {
-  const ContactsView({super.key});
+  final ValueChanged<String>? onPrimaryContactChanged;
+  const ContactsView({super.key, this.onPrimaryContactChanged});
 
   @override
   State<ContactsView> createState() => _ContactsViewState();
@@ -1236,6 +1596,7 @@ class _ContactsViewState extends State<ContactsView> {
   }
 
   Future<void> _loadContacts() async {
+    setState(() => _isLoading = true);
     try {
       final list = await ContactsApiService.fetchContacts();
       if (mounted) {
@@ -1243,24 +1604,99 @@ class _ContactsViewState extends State<ContactsView> {
           _contacts = list;
           _isLoading = false;
         });
+        _notifyPrimaryContact();
       }
     } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
-  Future<void> _addContact() async {
+  void _notifyPrimaryContact() {
+    final primary = _contacts.where((c) => c.isPrimary).firstOrNull;
+    final name = primary?.name ?? (_contacts.isNotEmpty ? _contacts.first.name : '');
+    widget.onPrimaryContactChanged?.call(name);
+  }
+
+  void _openAddContactDialog() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => _AddContactSheet(
+        onSaved: (newContact) async {
+          Navigator.of(ctx).pop();
+          try {
+            final saved = await ContactsApiService.addContact(
+              name: newContact.name,
+              phone: newContact.phone,
+              relation: newContact.relation,
+              isPrimary: newContact.isPrimary,
+            );
+            if (mounted) {
+              setState(() {
+                if (saved.isPrimary) {
+                  _contacts = _contacts.map((c) => EmergencyContactItem(
+                    id: c.id,
+                    name: c.name,
+                    phone: c.phone,
+                    relation: c.relation,
+                    isPrimary: false,
+                  )).toList();
+                }
+                final existingIdx = _contacts.indexWhere((c) => c.id == saved.id || (c.phone == saved.phone && saved.phone.isNotEmpty));
+                if (existingIdx >= 0) {
+                  _contacts[existingIdx] = saved;
+                } else {
+                  _contacts.add(saved);
+                }
+              });
+              _notifyPrimaryContact();
+              _showSnack('Contact saved successfully', isError: false);
+            }
+          } catch (e) {
+            if (mounted) {
+              final msg = e.toString().replaceAll('Exception: ', '');
+              _showSnack('Failed to save contact: $msg');
+            }
+          }
+        },
+      ),
+    );
+  }
+
+  Future<void> _deleteContact(EmergencyContactItem contact) async {
+    // Optimistic removal
+    setState(() => _contacts.remove(contact));
+    _notifyPrimaryContact();
     try {
-      final newContact = await ContactsApiService.addContact(
-        name: 'New Contact',
-        phone: '+919876543210',
-        relation: 'Primary',
-        isPrimary: true,
-      );
-      setState(() => _contacts.add(newContact));
+      final success = await ContactsApiService.deleteContact(contact.id);
+      if (!success && mounted) {
+        // Re-add if server failed
+        setState(() => _contacts.add(contact));
+        _showSnack('Could not delete contact. Please try again.');
+      } else if (success && mounted) {
+        _showSnack('${contact.name} removed', isError: false);
+      }
     } catch (e) {
-      if (kDebugMode) print('Add contact note: $e');
+      if (mounted) {
+        setState(() => _contacts.add(contact));
+        _showSnack('Could not delete contact. Please try again.');
+      }
     }
+  }
+
+  void _showSnack(String message, {bool isError = true}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message, style: AppTextStyles.body(fontSize: 13, color: Colors.white)),
+        backgroundColor: isError ? AppColors.coral : AppColors.green,
+        duration: const Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+    );
   }
 
   @override
@@ -1275,69 +1711,359 @@ class _ContactsViewState extends State<ContactsView> {
               'Emergency contacts',
               style: AppTextStyles.display(fontSize: 19),
             ),
-            const Icon(
-              Icons.person_add_alt_1_rounded,
-              color: AppColors.amber,
-              size: 18,
+            IconButton(
+              onPressed: _openAddContactDialog,
+              icon: const Icon(
+                Icons.person_add_alt_1_rounded,
+                color: AppColors.amber,
+                size: 22,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              tooltip: 'Add contact',
             ),
           ],
         ),
-        const SizedBox(height: 16),
-        _Panel(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator(color: AppColors.amber))
-              : _contacts.isEmpty
-                  ? Column(
-                      children: const [
-                        _ContactRow(
-                          initials: 'MA',
-                          name: 'Mother',
-                          relation: 'Primary · always alerted',
-                        ),
-                        _ContactRow(
-                          initials: 'RK',
-                          name: 'Rohan (brother)',
-                          relation: 'Secondary',
-                        ),
-                      ],
-                    )
-                  : Column(
-                      children: _contacts.map((c) {
-                        final initials = c.name.split(' ').map((e) => e.isNotEmpty ? e[0] : '').take(2).join('').toUpperCase();
-                        return _ContactRow(
-                          initials: initials.isEmpty ? 'EC' : initials,
-                          name: c.name,
-                          relation: '${c.relation}${c.isPrimary ? ' · Primary' : ''}',
-                        );
-                      }).toList(),
-                    ),
+        const SizedBox(height: 6),
+        Text(
+          'These contacts are alerted instantly when you trigger an SOS.',
+          style: AppTextStyles.body(fontSize: 11.5, color: AppColors.faint),
         ),
+        const SizedBox(height: 16),
+        if (_isLoading)
+          const Center(
+            child: Padding(
+              padding: EdgeInsets.all(32),
+              child: CircularProgressIndicator(color: AppColors.amber),
+            ),
+          )
+        else if (_contacts.isEmpty)
+          _EmptyContactsState(onAdd: _openAddContactDialog)
+        else
+          _Panel(
+            child: Column(
+              children: _contacts.map((c) {
+                final initials = c.name
+                    .split(' ')
+                    .map((e) => e.isNotEmpty ? e[0] : '')
+                    .take(2)
+                    .join()
+                    .toUpperCase();
+                return Dismissible(
+                  key: Key(c.id),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    padding: const EdgeInsets.only(right: 16),
+                    decoration: BoxDecoration(
+                      color: AppColors.coral.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.delete_outline_rounded, color: AppColors.coral, size: 20),
+                  ),
+                  confirmDismiss: (_) async {
+                    return await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: Text('Remove contact?', style: AppTextStyles.display(fontSize: 17)),
+                        content: Text(
+                          'Remove ${c.name} from your emergency contacts?',
+                          style: AppTextStyles.body(fontSize: 13),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, false),
+                            child: Text('Cancel', style: AppTextStyles.body(color: AppColors.muted)),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pop(ctx, true),
+                            child: Text('Remove', style: AppTextStyles.body(color: AppColors.coral)),
+                          ),
+                        ],
+                      ),
+                    ) ?? false;
+                  },
+                  onDismissed: (_) => _deleteContact(c),
+                  child: _ContactRow(
+                    initials: initials.isEmpty ? 'EC' : initials,
+                    name: c.name,
+                    phone: c.phone,
+                    relation: c.relation,
+                    isPrimary: c.isPrimary,
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
         const SizedBox(height: 14),
         OutlinedButton.icon(
-          onPressed: _addContact,
+          onPressed: _openAddContactDialog,
           icon: const Icon(Icons.add, size: 16),
           label: Text('Add contact', style: AppTextStyles.body(fontSize: 12.5)),
           style: OutlinedButton.styleFrom(
             minimumSize: const Size.fromHeight(48),
             foregroundColor: AppColors.muted,
             side: const BorderSide(color: AppColors.border),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           ),
         ),
+        if (_contacts.isNotEmpty) ...[
+          const SizedBox(height: 10),
+          Center(
+            child: Text(
+              'Swipe left on a contact to remove them.',
+              style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
+            ),
+          ),
+        ],
       ],
     ),
   );
 }
 
+class _EmptyContactsState extends StatelessWidget {
+  final VoidCallback onAdd;
+  const _EmptyContactsState({required this.onAdd});
+
+  @override
+  Widget build(BuildContext context) => _Panel(
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: [
+          Icon(Icons.people_outline_rounded, size: 44, color: AppColors.faint.withValues(alpha: 0.6)),
+          const SizedBox(height: 12),
+          Text(
+            'No emergency contacts yet',
+            style: AppTextStyles.body(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.muted),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Add trusted contacts who will be\nalerted if you trigger an SOS.',
+            textAlign: TextAlign.center,
+            style: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.person_add_alt_1_rounded, size: 16),
+            label: Text('Add first contact', style: AppTextStyles.body(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.bgDeep)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.amber,
+              foregroundColor: AppColors.bgDeep,
+              elevation: 0,
+              shape: const StadiumBorder(),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+/// Bottom sheet form for adding a new emergency contact.
+class _AddContactSheet extends StatefulWidget {
+  final void Function(EmergencyContactItem contact) onSaved;
+  const _AddContactSheet({required this.onSaved});
+
+  @override
+  State<_AddContactSheet> createState() => _AddContactSheetState();
+}
+
+class _AddContactSheetState extends State<_AddContactSheet> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameCtrl = TextEditingController();
+  final _phoneCtrl = TextEditingController();
+  final _relationCtrl = TextEditingController();
+  bool _isPrimary = false;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _phoneCtrl.dispose();
+    _relationCtrl.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState!.validate()) {
+      widget.onSaved(EmergencyContactItem(
+        id: '', // Will be set by server
+        name: _nameCtrl.text.trim(),
+        phone: _phoneCtrl.text.trim(),
+        relation: _relationCtrl.text.trim().isEmpty ? 'Contact' : _relationCtrl.text.trim(),
+        isPrimary: _isPrimary,
+      ));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.of(context).viewInsets.bottom;
+    return Container(
+      padding: EdgeInsets.fromLTRB(24, 24, 24, 24 + bottom),
+      decoration: const BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            Text(
+              'Add emergency contact',
+              style: AppTextStyles.display(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 18),
+            _SheetField(
+              controller: _nameCtrl,
+              label: 'Full name',
+              hint: 'e.g. Priya Sharma',
+              icon: Icons.person_outline,
+              validator: (v) => (v == null || v.trim().isEmpty) ? 'Name is required' : null,
+            ),
+            const SizedBox(height: 12),
+            _SheetField(
+              controller: _phoneCtrl,
+              label: 'Phone number',
+              hint: 'e.g. +919876543210',
+              icon: Icons.phone_outlined,
+              keyboardType: TextInputType.phone,
+              inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9+]'))],
+              validator: (v) {
+                if (v == null || v.trim().isEmpty) return 'Phone number is required';
+                if (v.trim().length < 10) return 'Enter a valid phone number';
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            _SheetField(
+              controller: _relationCtrl,
+              label: 'Relation (optional)',
+              hint: 'e.g. Mother, Sister, Friend',
+              icon: Icons.favorite_border_rounded,
+            ),
+            const SizedBox(height: 14),
+            GestureDetector(
+              onTap: () => setState(() => _isPrimary = !_isPrimary),
+              child: Row(
+                children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    width: 20,
+                    height: 20,
+                    decoration: BoxDecoration(
+                      color: _isPrimary ? AppColors.amber : Colors.transparent,
+                      border: Border.all(
+                        color: _isPrimary ? AppColors.amber : AppColors.muted,
+                        width: 1.5,
+                      ),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: _isPrimary
+                        ? const Icon(Icons.check_rounded, size: 14, color: AppColors.bgDeep)
+                        : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    'Set as primary contact (always alerted first)',
+                    style: AppTextStyles.body(fontSize: 12.5),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            _PrimaryButton(label: 'Save contact', onPressed: _submit),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SheetField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label, hint;
+  final IconData icon;
+  final TextInputType? keyboardType;
+  final List<TextInputFormatter>? inputFormatters;
+  final String? Function(String?)? validator;
+
+  const _SheetField({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    required this.icon,
+    this.keyboardType,
+    this.inputFormatters,
+    this.validator,
+  });
+
+  @override
+  Widget build(BuildContext context) => TextFormField(
+    controller: controller,
+    keyboardType: keyboardType,
+    inputFormatters: inputFormatters,
+    validator: validator,
+    style: AppTextStyles.body(fontSize: 13),
+    decoration: InputDecoration(
+      labelText: label,
+      hintText: hint,
+      prefixIcon: Icon(icon, size: 18, color: AppColors.amber),
+      filled: true,
+      fillColor: AppColors.bg,
+      labelStyle: AppTextStyles.body(fontSize: 12, color: AppColors.muted),
+      hintStyle: AppTextStyles.body(fontSize: 12, color: AppColors.faint),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.border),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.amber, width: 1.5),
+      ),
+      errorBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: AppColors.coral),
+      ),
+    ),
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Settings View — all toggles persisted via shared_preferences
+// ─────────────────────────────────────────────────────────────────────────────
+
 class SettingsView extends StatefulWidget {
   final bool audioEnabled;
   final ValueChanged<bool> onAudioToggle;
   final AudioDetectionService audioService;
+  final VoidCallback? onNavigateContacts;
 
   const SettingsView({
     super.key,
     required this.audioEnabled,
     required this.onAudioToggle,
     required this.audioService,
+    this.onNavigateContacts,
   });
 
   @override
@@ -1345,98 +2071,187 @@ class SettingsView extends StatefulWidget {
 }
 
 class _SettingsViewState extends State<SettingsView> {
-  final _otherValues = [true, true, true];
+  static const _keyPodMatching = 'setting_pod_matching';
+  static const _keyPreciseLocation = 'setting_precise_location';
+  static const _keyDecoyCall = 'setting_decoy_call';
+  static const _keySensitivity = 'setting_sensitivity';
+
+  bool _podMatching = true;
+  bool _preciseLocation = true;
+  bool _decoyCall = true;
   SensitivityLevel _sensitivity = SensitivityLevel.medium;
+  bool _loadedPrefs = false;
 
   @override
-  Widget build(BuildContext context) => _Page(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text('Safety settings', style: AppTextStyles.display(fontSize: 19)),
-        const SizedBox(height: 16),
-        _Panel(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _SettingRow(
-                icon: Icons.mic_none_rounded,
-                title: 'Passive audio detection',
-                sub: 'On-device only, opt-in, active during commutes',
-                value: widget.audioEnabled,
-                onChanged: widget.onAudioToggle,
-              ),
-              if (widget.audioEnabled) ...[
-                const Padding(
-                  padding: EdgeInsets.only(left: 28, top: 4, bottom: 8),
-                  child: Text(
-                    'Detection Sensitivity',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.muted),
-                  ),
+  void initState() {
+    super.initState();
+    _loadPreferences();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() {
+        _podMatching = prefs.getBool(_keyPodMatching) ?? true;
+        _preciseLocation = prefs.getBool(_keyPreciseLocation) ?? true;
+        _decoyCall = prefs.getBool(_keyDecoyCall) ?? true;
+        final sensitivityIndex = prefs.getInt(_keySensitivity) ?? SensitivityLevel.medium.index;
+        _sensitivity = SensitivityLevel.values[sensitivityIndex.clamp(0, SensitivityLevel.values.length - 1)];
+        _loadedPrefs = true;
+      });
+    }
+  }
+
+  Future<void> _saveBool(String key, bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(key, value);
+  }
+
+  Future<void> _saveInt(String key, int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(key, value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loadedPrefs) {
+      return const Center(child: CircularProgressIndicator(color: AppColors.amber));
+    }
+
+    return _Page(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Safety settings', style: AppTextStyles.display(fontSize: 19)),
+          const SizedBox(height: 16),
+          _Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _SettingRow(
+                  icon: Icons.mic_none_rounded,
+                  title: 'Passive audio detection',
+                  sub: 'On-device only, opt-in, active during commutes',
+                  value: widget.audioEnabled,
+                  onChanged: widget.onAudioToggle,
                 ),
-                Padding(
-                  padding: const EdgeInsets.only(left: 28, bottom: 12),
-                  child: Row(
-                    children: SensitivityLevel.values.map((lvl) {
-                      final selected = _sensitivity == lvl;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(
-                            lvl.name.toUpperCase(),
-                            style: AppTextStyles.mono(
-                              fontSize: 10,
-                              color: selected ? AppColors.bgDeep : AppColors.muted,
-                            ),
-                          ),
-                          selected: selected,
-                          selectedColor: AppColors.amber,
-                          onSelected: (_) {
-                            setState(() => _sensitivity = lvl);
-                            widget.audioService.sensitivity = lvl;
-                          },
-                        ),
-                      );
-                    }).toList(),
+                if (widget.audioEnabled) ...[
+                  const Padding(
+                    padding: EdgeInsets.only(left: 28, top: 4, bottom: 8),
+                    child: Text(
+                      'Detection Sensitivity',
+                      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.muted),
+                    ),
                   ),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 28, bottom: 12),
+                    child: Row(
+                      children: SensitivityLevel.values.map((lvl) {
+                        final selected = _sensitivity == lvl;
+                        return Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ChoiceChip(
+                            label: Text(
+                              lvl.name.toUpperCase(),
+                              style: AppTextStyles.mono(
+                                fontSize: 10,
+                                color: selected ? AppColors.bgDeep : AppColors.muted,
+                              ),
+                            ),
+                            selected: selected,
+                            selectedColor: AppColors.amber,
+                            onSelected: (_) {
+                              setState(() => _sensitivity = lvl);
+                              widget.audioService.sensitivity = lvl;
+                              _saveInt(_keySensitivity, lvl.index);
+                            },
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ],
+                _SettingRow(
+                  icon: Icons.people_alt_outlined,
+                  title: 'Auto pod matching',
+                  sub: 'Match with others on similar routes and timing',
+                  value: _podMatching,
+                  onChanged: (v) {
+                    setState(() => _podMatching = v);
+                    _saveBool(_keyPodMatching, v);
+                  },
+                ),
+                _SettingRow(
+                  icon: Icons.location_on_outlined,
+                  title: 'Precise location sharing',
+                  sub: 'Share exact GPS instead of general area',
+                  value: _preciseLocation,
+                  onChanged: (v) {
+                    setState(() => _preciseLocation = v);
+                    _saveBool(_keyPreciseLocation, v);
+                  },
+                ),
+                _SettingRow(
+                  icon: Icons.volume_up_outlined,
+                  title: 'Decoy call on SOS',
+                  sub: 'Show a fake incoming call when alert triggers',
+                  value: _decoyCall,
+                  onChanged: (v) {
+                    setState(() => _decoyCall = v);
+                    _saveBool(_keyDecoyCall, v);
+                  },
                 ),
               ],
-              _SettingRow(
-                icon: Icons.people_alt_outlined,
-                title: 'Auto pod matching',
-                sub: 'Match with others on similar routes and timing',
-                value: _otherValues[0],
-                onChanged: (v) => setState(() => _otherValues[0] = v),
-              ),
-              _SettingRow(
-                icon: Icons.location_on_outlined,
-                title: 'Precise location sharing',
-                sub: 'Share exact GPS instead of general area',
-                value: _otherValues[1],
-                onChanged: (v) => setState(() => _otherValues[1] = v),
-              ),
-              _SettingRow(
-                icon: Icons.volume_up_outlined,
-                title: 'Decoy call on SOS',
-                sub: 'Show a fake incoming call when alert triggers',
-                value: _otherValues[2],
-                onChanged: (v) => setState(() => _otherValues[2] = v),
-              ),
-            ],
+            ),
           ),
-        ),
-        const SizedBox(height: 12),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          child: Text(
-            'Audio is processed on your device. Nothing is uploaded unless an SOS is triggered.',
-            style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+          const SizedBox(height: 14),
+          // Emergency Contacts shortcut
+          _Panel(
+            child: InkWell(
+              onTap: widget.onNavigateContacts,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.people_alt_outlined, size: 17, color: AppColors.amber),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Manage emergency contacts', style: AppTextStyles.body(fontSize: 13)),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Add or remove contacts who get alerted on SOS',
+                            style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, size: 18, color: AppColors.faint),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ),
-      ],
-    ),
-  );
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              'Audio is processed on your device. Nothing is uploaded unless an SOS is triggered.',
+              style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Shared Layout Widgets
+// ─────────────────────────────────────────────────────────────────────────────
 
 class _Page extends StatelessWidget {
   final Widget child;
@@ -1512,158 +2327,64 @@ class _PrimaryButton extends StatelessWidget {
   );
 }
 
-class _InfoLine extends StatelessWidget {
-  final IconData icon;
-  final String text;
-  final bool mono;
-  const _InfoLine({required this.icon, required this.text, this.mono = false});
-  @override
-  Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.only(bottom: 7),
-    child: Row(
-      children: [
-        Icon(icon, size: 14, color: mono ? AppColors.faint : AppColors.amber),
-        const SizedBox(width: 8),
-        Text(
-          text,
-          style: mono
-              ? AppTextStyles.mono(fontSize: 11.5, color: AppColors.faint)
-              : AppTextStyles.body(fontSize: 13.5),
-        ),
-      ],
-    ),
-  );
-}
-
-class _Stat extends StatelessWidget {
-  final String value, label;
-  const _Stat({required this.value, required this.label});
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Text(
-        value,
-        style: AppTextStyles.mono(fontSize: 19, fontWeight: FontWeight.w500),
-      ),
-      Text(
-        label,
-        style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
-      ),
-    ],
-  );
-}
-
-class _LayerChip extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  const _LayerChip({required this.label, required this.icon});
-  @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-    decoration: BoxDecoration(
-      color: AppColors.amber.withValues(alpha: .1),
-      border: Border.all(color: AppColors.amber),
-      borderRadius: BorderRadius.circular(30),
-    ),
-    child: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: AppColors.amber),
-        const SizedBox(width: 6),
-        Text(
-          label,
-          style: AppTextStyles.body(fontSize: 10.5, color: AppColors.amber),
-        ),
-      ],
-    ),
-  );
-}
-
-class _PodMember extends StatelessWidget {
-  final String initials;
-  final bool reached;
-  const _PodMember({required this.initials, required this.reached});
-  @override
-  Widget build(BuildContext context) => _ListLine(
-    leading: CircleAvatar(
-      radius: 17,
-      backgroundColor: AppColors.surface2,
-      foregroundColor: AppColors.text,
-      child: Text(
-        initials,
-        style: AppTextStyles.body(fontSize: 12, fontWeight: FontWeight.w700),
-      ),
-    ),
-    title: 'Companion $initials',
-    subtitle: reached
-        ? 'Reached safely · 8:52 PM'
-        : 'En route · sharing location',
-    trailing: reached
-        ? const Icon(Icons.check, color: AppColors.green, size: 16)
-        : Text(
-            'live',
-            style: AppTextStyles.mono(fontSize: 10, color: AppColors.amber),
-          ),
-  );
-}
-
 class _ContactRow extends StatelessWidget {
-  final String initials, name, relation;
+  final String initials, name, phone, relation;
+  final bool isPrimary;
   const _ContactRow({
     required this.initials,
     required this.name,
+    required this.phone,
     required this.relation,
-  });
-  @override
-  Widget build(BuildContext context) => _ListLine(
-    leading: CircleAvatar(
-      radius: 17,
-      backgroundColor: AppColors.surface2,
-      foregroundColor: AppColors.amber,
-      child: Text(
-        initials,
-        style: AppTextStyles.body(fontSize: 12, fontWeight: FontWeight.w700),
-      ),
-    ),
-    title: name,
-    subtitle: relation,
-    trailing: const Icon(Icons.chevron_right, color: AppColors.faint, size: 16),
-  );
-}
-
-class _ListLine extends StatelessWidget {
-  final Widget leading, trailing;
-  final String title, subtitle;
-  const _ListLine({
-    required this.leading,
-    required this.title,
-    required this.subtitle,
-    required this.trailing,
+    this.isPrimary = false,
   });
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 9),
     child: Row(
       children: [
-        leading,
+        CircleAvatar(
+          radius: 17,
+          backgroundColor: isPrimary
+              ? AppColors.amber.withValues(alpha: 0.18)
+              : AppColors.surface2,
+          foregroundColor: isPrimary ? AppColors.amber : AppColors.muted,
+          child: Text(
+            initials,
+            style: AppTextStyles.body(fontSize: 12, fontWeight: FontWeight.w700),
+          ),
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title, style: AppTextStyles.body(fontSize: 13)),
+              Row(
+                children: [
+                  Text(name, style: AppTextStyles.body(fontSize: 13)),
+                  if (isPrimary) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.amber.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'Primary',
+                        style: AppTextStyles.mono(fontSize: 9, color: AppColors.amber, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
               Text(
-                subtitle,
-                style: AppTextStyles.body(
-                  fontSize: 10.5,
-                  color: AppColors.faint,
-                ),
+                '$relation · $phone',
+                style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
               ),
             ],
           ),
         ),
-        trailing,
+        const Icon(Icons.chevron_right, color: AppColors.faint, size: 16),
       ],
     ),
   );

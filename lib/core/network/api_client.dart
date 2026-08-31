@@ -1,9 +1,21 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
+import 'package:flutter/foundation.dart';
+
 class ApiClient {
-  // Base URL: defaults to localhost:3000
-  static String baseUrl = 'http://localhost:3000/api/v1';
+  static String? customBaseUrl;
+  
+  static String get baseUrl {
+    if (customBaseUrl != null && customBaseUrl!.isNotEmpty) {
+      return customBaseUrl!;
+    }
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:3000/api/v1';
+    }
+    return 'http://localhost:3000/api/v1';
+  }
+
   static String? authToken;
 
   static Map<String, String> get _headers {

@@ -8,6 +8,9 @@ const apiSecret = process.env.TWILIO_API_SECRET;
 const fromPhone = process.env.TWILIO_PHONE_NUMBER;
 
 function getTwilioClient() {
+  if (!accountSid || accountSid.includes('xxxxx') || accountSid === 'ACxxxxx') {
+    return null;
+  }
   if (apiKey && apiSecret && accountSid) {
     return twilio(apiKey, apiSecret, { accountSid });
   }
@@ -39,6 +42,10 @@ export async function dispatchEmergencyAlerts(
 
   const client = getTwilioClient();
 
+  if (!client) {
+    console.log(`ℹ️ [SMS SIMULATION MODE] Twilio is not configured or using placeholder credentials. Alert message: "${alertMessage}"`);
+  }
+
   // Send SMS to emergency contacts
   for (const contact of contactsRes.rows) {
     let externalMsgId = `SM_mock_${Date.now()}`;
@@ -54,12 +61,15 @@ export async function dispatchEmergencyAlerts(
         externalMsgId = msg.sid;
         status = msg.status.toUpperCase();
         console.log(`📱 [TWILIO SMS SENT] SID: ${msg.sid} to ${contact.contact_name} (${contact.phone_number})`);
-      } catch (err) {
-        console.error(`❌ [TWILIO ERROR] Failed to send SMS to ${contact.phone_number}:`, err);
+      } catch (err: any) {
+        console.error(`❌ [TWILIO ERROR] Failed to send SMS to ${contact.phone_number}:`, err?.message || err);
+        if (err?.code === 21608 || err?.code === 20003) {
+          console.warn(`👉 Note: In Twilio Trial accounts, SMS can only be sent to Verified Caller IDs registered in your Twilio console.`);
+        }
         status = 'FAILED';
       }
     } else {
-      console.log(`📱 [MOCK SMS] Sent to ${contact.contact_name} (${contact.phone_number}): "${alertMessage}"`);
+      console.log(`📱 [SIMULATED SMS DELIVERED] To ${contact.contact_name} (${contact.phone_number}): "${alertMessage}"`);
     }
 
     await query(

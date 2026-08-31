@@ -15,9 +15,21 @@ export async function addEmergencyContact(
   relation: string,
   isPrimary: boolean = false
 ) {
+  if (isPrimary) {
+    await query(
+      'UPDATE emergency_contacts SET is_primary = FALSE WHERE user_id = $1',
+      [userId]
+    );
+  }
+
   const res = await query(
     `INSERT INTO emergency_contacts (user_id, contact_name, phone_number, relationship, is_primary)
      VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (user_id, phone_number)
+     DO UPDATE SET 
+       contact_name = EXCLUDED.contact_name,
+       relationship = EXCLUDED.relationship,
+       is_primary = EXCLUDED.is_primary
      RETURNING *`,
     [userId, name, phone, relation, isPrimary]
   );

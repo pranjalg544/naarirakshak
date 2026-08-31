@@ -12,10 +12,15 @@ class LiveLocationSocketService {
 
   bool get isConnected => _isConnected;
 
-  void connect({String serverUrl = 'http://localhost:3000'}) {
+  void connect({String? serverUrl}) {
+    final targetUrl = serverUrl ??
+        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android
+            ? 'http://10.0.2.2:3000'
+            : 'http://localhost:3000');
+
     if (_socket != null && _isConnected) return;
 
-    _socket = io.io(serverUrl, io.OptionBuilder()
+    _socket = io.io(targetUrl, io.OptionBuilder()
         .setTransports(['websocket', 'polling'])
         .enableAutoConnect()
         .build());

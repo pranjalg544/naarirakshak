@@ -17,11 +17,11 @@ class EmergencyContactItem {
 
   factory EmergencyContactItem.fromJson(Map<String, dynamic> json) {
     return EmergencyContactItem(
-      id: json['id'] as String,
-      name: json['contact_name'] as String,
-      phone: json['phone_number'] as String,
-      relation: json['relation'] as String,
-      isPrimary: json['is_primary'] as bool? ?? false,
+      id: json['id']?.toString() ?? '',
+      name: (json['contact_name'] ?? json['name'])?.toString() ?? '',
+      phone: (json['phone_number'] ?? json['phone'])?.toString() ?? '',
+      relation: (json['relationship'] ?? json['relation'])?.toString() ?? 'Contact',
+      isPrimary: (json['is_primary'] ?? json['isPrimary']) as bool? ?? false,
     );
   }
 }
@@ -48,8 +48,11 @@ class ContactsApiService {
       'relation': relation,
       'isPrimary': isPrimary,
     });
-    final contactJson = response['contact'] as Map<String, dynamic>;
-    return EmergencyContactItem.fromJson(contactJson);
+    if (response['success'] == true && response['contact'] != null) {
+      final contactJson = response['contact'] as Map<String, dynamic>;
+      return EmergencyContactItem.fromJson(contactJson);
+    }
+    throw Exception(response['message'] ?? 'Failed to add contact');
   }
 
   static Future<bool> deleteContact(String id) async {
