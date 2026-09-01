@@ -1,31 +1,20 @@
 import 'dart:async';
-import 'dart:js_interop';
 import 'dart:math' as math;
-import 'dart:typed_data';
-
-import 'package:web/web.dart' as web;
+import 'package:flutter/foundation.dart';
+import 'package:record/record.dart';
+import 'tflite_helper.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Pipeline state machine: idle → listening → detecting → triggered.
 enum DetectionState { idle, listening, detecting, triggered }
-
-/// User-selectable sensitivity preset.
 enum SensitivityLevel { low, medium, high }
 
-/// A single frame of analysis data emitted at ~60 fps while listening.
 class AudioDetectionSnapshot {
   final DetectionState state;
-
-  /// Normalised RMS amplitude (0.0–1.0).
   final double amplitude;
-
-  /// Weighted confidence score (0.0–1.0).
   final double confidence;
-
-  /// Ratio of energy in the 1–4 kHz band vs. total.
   final double highFreqRatio;
 
   const AudioDetectionSnapshot({
@@ -37,214 +26,248 @@ class AudioDetectionSnapshot {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Service
+// Service — On-device scream detection using TFLite 1D CNN on raw audio.
+//
+// Model details (from ml/train_scream_detector_v2.py):
+//   - Input:  [1, 24000, 1]  (3 seconds at 8000 Hz, mono, normalized float32)
+//   - Output: [1, 1]         (sigmoid probability: 0.0 = not scream, 1.0 = scream)
+//   - Architecture: 4-block 1D CNN with BatchNorm, GlobalAvgPool, Dropout
+//   - Test AUC: 0.9678, Accuracy: ~91%
+//   - On-device only. Raw audio is never uploaded unless SOS is triggered.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// On-device audio detection service backed by the **Web Audio API**.
-///
-/// Captures microphone input, runs real-time FFT analysis, and flags sustained
-/// high-amplitude, high-frequency sounds (screams / distress) using
-/// signal-processing heuristics.
-///
-/// The classifier is intentionally isolated behind the [snapshots] and
-/// [onDistressDetected] streams so that a real CNN / LSTM TFLite model can
-/// replace the heuristic later without touching any consumer code.
 class AudioDetectionService {
-  // ── Web Audio objects ──────────────────────────────────────────────
-  web.AudioContext? _ctx;
-  web.AnalyserNode? _analyser;
-  web.MediaStream? _mediaStream;
-  JSUint8Array? _timeDataJS;
-  JSUint8Array? _freqDataJS;
+  // ── Audio & ML objects ─────────────────────────────────────────────
+  final AudioRecorder _audioRecorder = AudioRecorder();
+  StreamSubscription<List<int>>? _audioStreamSub;
+  Interpreter? _interpreter;
 
   // ── Internal state ─────────────────────────────────────────────────
   DetectionState _state = DetectionState.idle;
   SensitivityLevel _sensitivity = SensitivityLevel.medium;
-  DateTime? _sustainStart;
-  Timer? _loopTimer;
+  
+  // Buffer to hold raw audio samples (PCM 16-bit → normalized float32)
+  final List<double> _audioBuffer = [];
+
+  // Must match the training config in ml/train_scream_detector_v2.py
+  static const int _sampleRate = 8000;
+  static const int _clipDurationSeconds = 3;
+  static const int _requiredSamples = _sampleRate * _clipDurationSeconds; // 24000
+
+  // Consecutive detection counter for false-positive reduction
+  int _consecutiveDetections = 0;
+  static const int _requiredConsecutive = 2; // Need 2 consecutive windows above threshold
 
   // ── Public streams ─────────────────────────────────────────────────
   final _snapshots = StreamController<AudioDetectionSnapshot>.broadcast();
   final _triggers = StreamController<double>.broadcast();
 
-  /// Real-time analysis snapshots (~60 fps while listening).
   Stream<AudioDetectionSnapshot> get snapshots => _snapshots.stream;
-
-  /// Fires **once** when a sustained distress sound is confirmed.
-  /// The payload is the detection confidence (0.0–1.0).
   Stream<double> get onDistressDetected => _triggers.stream;
-
-  /// Current pipeline state.
   DetectionState get state => _state;
-
-  /// Change the sensitivity preset (takes effect on next analysis frame).
   set sensitivity(SensitivityLevel level) => _sensitivity = level;
 
   // ── Thresholds ─────────────────────────────────────────────────────
-  //  amp   – minimum RMS amplitude to consider "loud"
-  //  freq  – minimum ratio of energy in the 1–4 kHz band
-  //  ms    – how long both conditions must be sustained
-  static const _thresholds = <SensitivityLevel, ({double amp, double freq, int ms})>{
-    SensitivityLevel.low: (amp: 0.45, freq: 0.40, ms: 900),
-    SensitivityLevel.medium: (amp: 0.30, freq: 0.35, ms: 600),
-    SensitivityLevel.high: (amp: 0.20, freq: 0.28, ms: 400),
+  // These map to confidence levels at which the model triggers SOS.
+  // The model's precision at 0.5 threshold is 85%, so medium (0.75) is safe.
+  static const _thresholds = <SensitivityLevel, double>{
+    SensitivityLevel.low: 0.90,    // Very conservative — minimal false positives
+    SensitivityLevel.medium: 0.75, // Balanced — good for daily commutes
+    SensitivityLevel.high: 0.60,   // Aggressive — catches more, may false-trigger
   };
 
   // ── Lifecycle ──────────────────────────────────────────────────────
 
-  /// Request the microphone, wire the Web Audio graph, and start analysing.
-  /// Returns `true` on success, `false` if permission is denied or unavailable.
   Future<bool> startListening() async {
     if (_state != DetectionState.idle) return true;
 
     try {
-      // 1. Microphone access
-      _mediaStream = await web.window.navigator.mediaDevices
-          .getUserMedia(web.MediaStreamConstraints(audio: true.toJS))
-          .toDart;
+      // 1. Check microphone permissions
+      if (!await _audioRecorder.hasPermission()) {
+        debugPrint('AudioDetection: Microphone permission denied');
+        return false;
+      }
 
-      // 2. Web Audio graph: mic → analyser (no speakers)
-      _ctx = web.AudioContext();
-      _analyser = _ctx!.createAnalyser();
-      _analyser!.fftSize = 2048;
-      _analyser!.smoothingTimeConstant = 0.3;
+      // 2. Load TFLite Model (lazy — only loads once)
+      _interpreter ??= await Interpreter.fromAsset('assets/scream_detector.tflite');
+      debugPrint('AudioDetection: TFLite model loaded successfully');
+      debugPrint('  Input shape:  ${_interpreter!.getInputTensor(0).shape}');
+      debugPrint('  Output shape: ${_interpreter!.getOutputTensor(0).shape}');
 
-      final source = _ctx!.createMediaStreamSource(_mediaStream!);
-      source.connect(_analyser!);
+      // 3. Start audio recording stream (PCM 16-bit, Mono, 8000 Hz)
+      final recordStream = await _audioRecorder.startStream(const RecordConfig(
+        encoder: AudioEncoder.pcm16bits,
+        sampleRate: _sampleRate,
+        numChannels: 1,
+      ));
 
-      // 3. Pre-allocate FFT buffers
-      final bins = _analyser!.frequencyBinCount;
-      _timeDataJS = Uint8List(bins).toJS;
-      _freqDataJS = Uint8List(bins).toJS;
-
-      // 4. Start the analysis loop (~60 fps)
       _state = DetectionState.listening;
-      _sustainStart = null;
+      _audioBuffer.clear();
+      _consecutiveDetections = 0;
       _emit();
 
-      _loopTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {
-        _analyzeFrame();
-      });
+      // 4. Process incoming audio chunks
+      _audioStreamSub = recordStream.listen(
+        (data) => _processAudioChunk(data),
+        onError: (err) {
+          debugPrint('AudioDetection: Stream error: $err');
+          _state = DetectionState.idle;
+          _emit();
+        },
+      );
 
       return true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('AudioDetection: Startup error: $e');
       _state = DetectionState.idle;
       _emit();
       return false;
     }
   }
 
-  /// Stop the microphone and release all Web Audio resources.
   void stopListening() {
-    _loopTimer?.cancel();
-    _loopTimer = null;
-
-    // Stop every mic track
-    final tracks = _mediaStream?.getTracks().toDart;
-    if (tracks != null) {
-      for (final t in tracks) {
-        t.stop();
-      }
-    }
-
-    _ctx?.close();
-    _ctx = null;
-    _analyser = null;
-    _mediaStream = null;
-    _timeDataJS = null;
-    _freqDataJS = null;
+    _audioStreamSub?.cancel();
+    _audioStreamSub = null;
+    _audioRecorder.stop();
     _state = DetectionState.idle;
-    _sustainStart = null;
+    _audioBuffer.clear();
+    _consecutiveDetections = 0;
     _emit();
   }
 
-  /// After the user cancels an auto-SOS countdown, resume listening.
   void resetAfterCancel() {
     if (_state == DetectionState.triggered) {
       _state = DetectionState.listening;
-      _sustainStart = null;
+      _audioBuffer.clear();
+      _consecutiveDetections = 0;
       _emit();
     }
   }
 
-  /// Permanently tear down – call when the service is no longer needed.
   void dispose() {
     stopListening();
+    _audioRecorder.dispose();
+    _interpreter?.close();
     _snapshots.close();
     _triggers.close();
   }
 
-  // ── Frame analysis ─────────────────────────────────────────────────
+  // ── Audio chunk processing ────────────────────────────────────────
 
-  void _analyzeFrame() {
-    if (_analyser == null ||
-        _state == DetectionState.idle ||
-        _state == DetectionState.triggered) {
+  void _processAudioChunk(List<int> pcmData) {
+    if (_state == DetectionState.idle || _state == DetectionState.triggered) {
       return;
     }
 
-    // ── Read raw data ───────────────────────────────────────────────
-    _analyser!.getByteTimeDomainData(_timeDataJS!);
-    _analyser!.getByteFrequencyData(_freqDataJS!);
-
-    final timeData = _timeDataJS!.toDart;
-    final freqData = _freqDataJS!.toDart;
-    final bufLen = timeData.length;
-
-    // ── RMS amplitude (0.0 – ~1.0) ─────────────────────────────────
-    double sumSq = 0;
-    for (int i = 0; i < bufLen; i++) {
-      final v = (timeData[i] - 128) / 128.0;
-      sumSq += v * v;
+    // Convert 16-bit PCM (little-endian bytes) to normalized floats [-1.0, 1.0]
+    final byteData = ByteData.view(Uint8List.fromList(pcmData).buffer);
+    for (int i = 0; i < byteData.lengthInBytes - 1; i += 2) {
+      final sample = byteData.getInt16(i, Endian.little) / 32768.0;
+      _audioBuffer.add(sample);
     }
-    final amplitude = math.sqrt(sumSq / bufLen);
 
-    // ── High-frequency energy ratio ─────────────────────────────────
-    // Screams concentrate energy between 1 kHz and 4 kHz.
-    final sampleRate = _ctx!.sampleRate.toDouble();
-    final binWidth = sampleRate / _analyser!.fftSize;
-    final lowBin = (1000 / binWidth).round();
-    final highBin = math.min((4000 / binWidth).round(), bufLen - 1);
-
-    double highEnergy = 0, totalEnergy = 0;
-    for (int i = 0; i < bufLen; i++) {
-      final e = freqData[i].toDouble();
-      totalEnergy += e;
-      if (i >= lowBin && i <= highBin) highEnergy += e;
+    // Compute running amplitude for UI visualization
+    if (_audioBuffer.length >= 512) {
+      final recent = _audioBuffer.sublist(_audioBuffer.length - 512);
+      final rms = math.sqrt(
+        recent.fold<double>(0.0, (sum, s) => sum + s * s) / recent.length,
+      );
+      _emit(amplitude: rms.clamp(0.0, 1.0));
     }
-    final highFreqRatio = totalEnergy > 0 ? highEnergy / totalEnergy : 0.0;
 
-    // ── Confidence ──────────────────────────────────────────────────
-    final t = _thresholds[_sensitivity]!;
-    final ampNorm = (amplitude / t.amp).clamp(0.0, 1.0);
-    final freqNorm = (highFreqRatio / t.freq).clamp(0.0, 1.0);
-    final confidence = ampNorm * 0.5 + freqNorm * 0.5;
+    // Every time we have 3 seconds of audio, run inference
+    if (_audioBuffer.length >= _requiredSamples) {
+      // Take the latest 3 seconds
+      final analysisBuffer = _audioBuffer.sublist(
+        _audioBuffer.length - _requiredSamples,
+      );
 
-    // ── Detection decision ──────────────────────────────────────────
-    final isScreamLike = amplitude > t.amp && highFreqRatio > t.freq;
+      // Keep only the last 1.5 seconds to create a 50% sliding window overlap
+      // This matches the training data augmentation strategy
+      _audioBuffer.removeRange(0, _requiredSamples ~/ 2);
 
-    if (isScreamLike) {
-      _sustainStart ??= DateTime.now();
-      _state = DetectionState.detecting;
+      _runInference(analysisBuffer);
+    }
+  }
 
-      final elapsed = DateTime.now().difference(_sustainStart!).inMilliseconds;
-      if (elapsed >= t.ms) {
-        _state = DetectionState.triggered;
-        _triggers.add(confidence);
-      }
+  // ── TFLite inference ──────────────────────────────────────────────
+
+  void _runInference(List<double> samples) {
+    if (_interpreter == null) return;
+
+    // Normalize to match librosa.util.normalize() used during training:
+    // Scale so that max(abs(samples)) == 1.0
+    double maxAbs = 0.0;
+    for (final s in samples) {
+      final abs = s.abs();
+      if (abs > maxAbs) maxAbs = abs;
+    }
+    final List<double> normalized;
+    if (maxAbs > 1e-6) {
+      normalized = samples.map((s) => s / maxAbs).toList();
     } else {
-      _sustainStart = null;
-      if (_state == DetectionState.detecting) {
-        _state = DetectionState.listening;
-      }
+      // Silence — skip inference
+      _state = DetectionState.listening;
+      _consecutiveDetections = 0;
+      _emit(confidence: 0.0);
+      return;
     }
 
-    _emit(amplitude: amplitude, confidence: confidence, highFreqRatio: highFreqRatio);
+    // Reshape for model input: [1, 24000, 1]
+    final input = [normalized.map((e) => [e]).toList()];
+
+    // Model output: [1, 1] containing sigmoid scream probability
+    final output = List.filled(1, List.filled(1, 0.0));
+
+    try {
+      _interpreter!.run(input, output);
+      final double screamProbability = output[0][0];
+      final threshold = _thresholds[_sensitivity]!;
+
+      if (screamProbability >= threshold) {
+        _consecutiveDetections++;
+        if (_consecutiveDetections >= _requiredConsecutive) {
+          // Confirmed distress — trigger SOS pipeline
+          _state = DetectionState.triggered;
+          _triggers.add(screamProbability);
+          debugPrint(
+            'AudioDetection: ⚠️ DISTRESS TRIGGERED '
+            '(confidence: ${(screamProbability * 100).toStringAsFixed(1)}%, '
+            'threshold: ${(threshold * 100).toStringAsFixed(0)}%, '
+            'consecutive: $_consecutiveDetections)',
+          );
+        } else {
+          // Elevated — need one more window to confirm
+          _state = DetectionState.detecting;
+          debugPrint(
+            'AudioDetection: 🔶 Elevated '
+            '(confidence: ${(screamProbability * 100).toStringAsFixed(1)}%, '
+            'need ${_requiredConsecutive - _consecutiveDetections} more)',
+          );
+        }
+      } else if (screamProbability >= threshold * 0.7) {
+        // Slightly elevated but not above threshold — reset consecutive counter
+        _state = DetectionState.detecting;
+        _consecutiveDetections = 0;
+      } else {
+        // Normal — all clear
+        _state = DetectionState.listening;
+        _consecutiveDetections = 0;
+      }
+
+      _emit(confidence: screamProbability);
+    } catch (e) {
+      debugPrint('AudioDetection: Inference error: $e');
+    }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────
 
-  void _emit({double amplitude = 0, double confidence = 0, double highFreqRatio = 0}) {
+  void _emit({
+    double amplitude = 0,
+    double confidence = 0,
+    double highFreqRatio = 0,
+  }) {
     if (!_snapshots.isClosed) {
       _snapshots.add(AudioDetectionSnapshot(
         state: _state,

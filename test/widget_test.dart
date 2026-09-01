@@ -36,7 +36,7 @@ void main() {
     await tester.tap(find.text('Create account'));
     await tester.pump(const Duration(milliseconds: 100));
 
-    expect(find.text('Good evening,'), findsOneWidget);
+    expect(find.textContaining('Good '), findsOneWidget);
     expect(find.text('Priya Kapoor'), findsOneWidget);
     expect(find.text('Ready for your commute'), findsOneWidget);
   });

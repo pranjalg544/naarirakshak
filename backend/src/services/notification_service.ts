@@ -83,9 +83,13 @@ export async function dispatchEmergencyAlerts(
         smsSent += 1;
         console.log(`📱 [TWILIO SMS ${status}] SID: ${msg.sid} to ${contact.contact_name} (${recipient})`);
       } catch (err: any) {
-        console.error(`❌ [TWILIO ERROR] Failed to send SMS to ${contact.contact_name} (${recipient}):`, err?.message || err);
-        if (err?.code === 21608 || err?.code === 20003) {
-          console.warn(`👉 Note: In Twilio Trial accounts, SMS can only be sent to Verified Caller IDs registered in your Twilio console.`);
+        console.error(`❌ [TWILIO SMS ERROR] Failed to send SMS to ${contact.contact_name} (${recipient}):`, err?.message || err);
+        if (err?.code === 572006) {
+          console.warn(`👉 [TWILIO TRIAL RESTRICTION]: Twilio trial +91 numbers block custom SMS body text (DLT requirement). Upgrade Twilio account or use a US (+1) Twilio number.`);
+        } else if (err?.code === 21608 || err?.code === 573003) {
+          console.warn(`👉 [UNVERIFIED NUMBER]: In Twilio Trial accounts, SMS can only be sent to Verified Caller IDs registered in your Twilio Console.`);
+        } else if (err?.code === 21408) {
+          console.warn(`👉 [GEO PERMISSION ERROR]: Enable SMS Geo Permissions for India (+91) in Twilio Console -> Messaging -> Settings -> Geo Permissions.`);
         }
         status = 'FAILED';
       }
@@ -102,12 +106,16 @@ export async function dispatchEmergencyAlerts(
     if (client && fromPhone && contact.is_primary) {
       try {
         await client.calls.create({
-          twiml: `<Response><Say>Emergency alert. ${userName} needs help. Her current location is ${lat}, ${lng}. Open the live tracking link sent by SMS.</Say></Response>`,
+          twiml: `<Response><Say voice="alice">Emergency alert. ${userName} needs immediate assistance. Please check your SMS for the live tracking link.</Say></Response>`,
           from: fromPhone,
           to: recipient,
         });
+        console.log(`📞 [TWILIO CALL DISPATCHED] Calling primary emergency contact ${contact.contact_name} (${recipient})`);
       } catch (err: any) {
-        console.error(`Failed to call primary emergency contact ${recipient}:`, err?.message || err);
+        console.error(`❌ [TWILIO VOICE ERROR] Failed to call primary contact ${contact.contact_name} (${recipient}):`, err?.message || err);
+        if (err?.code === 573003 || err?.code === 21215) {
+          console.warn(`👉 [UNVERIFIED VOICE RECIPIENT]: Register ${recipient} in Twilio Console -> Verified Caller IDs to allow trial calls.`);
+        }
       }
     }
   }
