@@ -5,12 +5,33 @@
 // gestures. You can also use WidgetTester to find child widgets in the widget
 // tree, read text, and verify that the values of widget properties are correct.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:naarirakshak/main.dart';
 
 void main() {
+  test('mobile platforms declare the location permissions required for live GPS tracking', () {
+    final androidManifest = File('android/app/src/main/AndroidManifest.xml');
+    final iosInfoPlist = File('ios/Runner/Info.plist');
+
+    expect(androidManifest.existsSync(), isTrue,
+        reason: 'Android manifest is missing.');
+    final androidContent = androidManifest.readAsStringSync();
+    expect(androidContent.contains('android.permission.ACCESS_FINE_LOCATION'), isTrue,
+        reason: 'ACCESS_FINE_LOCATION is required for GPS detection.');
+    expect(androidContent.contains('android.permission.ACCESS_COARSE_LOCATION'), isTrue,
+        reason: 'ACCESS_COARSE_LOCATION is required for coarse fallback on Android.');
+
+    expect(iosInfoPlist.existsSync(), isTrue,
+        reason: 'iOS Info.plist is missing.');
+    final iosContent = iosInfoPlist.readAsStringSync();
+    expect(iosContent.contains('NSLocationWhenInUseUsageDescription'), isTrue,
+        reason: 'iOS needs a location usage description for live tracking.');
+  });
+
   testWidgets('creating an account shows the account name on the dashboard', (
     WidgetTester tester,
   ) async {
