@@ -71,6 +71,8 @@ class _SafetyShellState extends State<SafetyShell> {
   // Primary contact name (for DecoyView)
   String _primaryContactName = '';
   String? _commuteTrackingToken;
+  // BUG FIX: store commuteId so PodView can fetch real pod members
+  String? _commuteId;
   bool _automaticSos = false;
 
   final _audioService = AudioDetectionService();
@@ -155,6 +157,7 @@ class _SafetyShellState extends State<SafetyShell> {
       _destinationName = name;
       _destinationLatLng = latLng;
       _commuteTrackingToken = null;
+      _commuteId = null;
     });
     _goTo(AppScreen.pod);
 
@@ -166,7 +169,12 @@ class _SafetyShellState extends State<SafetyShell> {
         destLat: latLng.latitude, destLng: latLng.longitude,
       );
       if (mounted) {
-        setState(() => _commuteTrackingToken = result['trackingToken'] as String?);
+        // BUG FIX: also store commuteId so PodView can fetch real pod members
+        final commute = result['commute'] as Map<String, dynamic>?;
+        setState(() {
+          _commuteTrackingToken = result['trackingToken'] as String?;
+          _commuteId = commute?['id'] as String?;
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -250,11 +258,14 @@ class _SafetyShellState extends State<SafetyShell> {
       destinationName: _destinationName,
       destinationLatLng: _destinationLatLng,
       trackingToken: _commuteTrackingToken,
+      // BUG FIX: pass commuteId so PodView fetches real members
+      commuteId: _commuteId,
       onReached: () {
         _audioService.stopListening();
         setState(() {
           _destinationName = '';
           _destinationLatLng = null;
+          _commuteId = null;
         });
         _goTo(AppScreen.home);
       },
@@ -981,6 +992,8 @@ class PodView extends StatefulWidget {
   final String destinationName;
   final LatLng? destinationLatLng;
   final String? trackingToken;
+  // BUG FIX: commuteId needed to fetch real pod members
+  final String? commuteId;
 
   const PodView({
     super.key,
@@ -990,6 +1003,7 @@ class PodView extends StatefulWidget {
     required this.destinationName,
     required this.destinationLatLng,
     this.trackingToken,
+    this.commuteId,
   });
 
   @override
@@ -1003,11 +1017,24 @@ class _PodViewState extends State<PodView> {
   Timer? _telemetryTimer;
   DateTime? _commuteStartTime;
 
+  // BUG FIX: real pod members fetched from API
+  List<PodMember> _podMembers = [];
+  bool _membersLoading = false;
+
   @override
   void initState() {
     super.initState();
     _commuteStartTime = DateTime.now();
     _initLocation();
+    if (widget.commuteId != null) {
+      _fetchPodMembers(widget.commuteId!);
+    }
+  }
+
+  Future<void> _fetchPodMembers(String commuteId) async {
+    if (mounted) setState(() => _membersLoading = true);
+    final members = await CommuteApiService.getPodMembers(commuteId);
+    if (mounted) setState(() { _podMembers = members; _membersLoading = false; });
   }
 
   Future<void> _initLocation() async {
@@ -1041,6 +1068,10 @@ class _PodViewState extends State<PodView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.trackingToken == null && widget.trackingToken != null) {
       _startTelemetry(widget.trackingToken!, _currentLocation ?? LocationService.defaultLocation);
+    }
+    // BUG FIX: fetch members when commuteId arrives (async from startCommute)
+    if (oldWidget.commuteId == null && widget.commuteId != null) {
+      _fetchPodMembers(widget.commuteId!);
     }
   }
 
@@ -1154,6 +1185,56 @@ class _PodViewState extends State<PodView> {
             titleLabel: 'Live GPS · OSM',
           ),
           const SizedBox(height: 12),
+          // ── BUG FIX: Pod Members section (real data from API) ──
+          _Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Safety Pod Members',
+                      style: AppTextStyles.body(fontSize: 12.5, fontWeight: FontWeight.w600),
+                    ),
+                    if (_membersLoading)
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 1.5,
+                          color: AppColors.amber,
+                        ),
+                      )
+                    else
+                      Text(
+                        '${_podMembers.length} member${_podMembers.length == 1 ? '' : 's'}',
+                        style: AppTextStyles.mono(fontSize: 10, color: AppColors.faint),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                if (_podMembers.isEmpty && !_membersLoading)
+                  Text(
+                    widget.commuteId == null
+                        ? 'Starting commute…'
+                        : 'No pod members found nearby.',
+                    style: AppTextStyles.body(fontSize: 11, color: AppColors.faint),
+                  )
+                else
+                  ...List.generate(_podMembers.length, (i) {
+                    final m = _podMembers[i];
+                    return _PodMemberRow(
+                      initials: m.initials,
+                      name: m.fullName,
+                      hasReached: m.hasReached,
+                      isLast: i == _podMembers.length - 1,
+                    );
+                  }),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           _Panel(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1204,6 +1285,87 @@ class _PodViewState extends State<PodView> {
               style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Pod Member Row widget (used in PodView with real API data)
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PodMemberRow extends StatelessWidget {
+  final String initials;
+  final String name;
+  final bool hasReached;
+  final bool isLast;
+
+  const _PodMemberRow({
+    required this.initials,
+    required this.name,
+    required this.hasReached,
+    this.isLast = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: isLast
+          ? null
+          : const BoxDecoration(
+              border: Border(bottom: BorderSide(color: AppColors.border, width: 1)),
+            ),
+      child: Row(
+        children: [
+          // Avatar circle with initials
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppColors.surface2,
+              border: Border.all(
+                color: hasReached ? AppColors.green : AppColors.amber,
+                width: 1.5,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              initials,
+              style: AppTextStyles.body(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.text,
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Name and status
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: AppTextStyles.body(fontSize: 13, color: AppColors.text),
+                ),
+                Text(
+                  hasReached ? 'Reached safely' : 'En route · sharing location',
+                  style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+                ),
+              ],
+            ),
+          ),
+          // Status indicator
+          if (hasReached)
+            const Icon(Icons.check_rounded, size: 15, color: AppColors.green)
+          else
+            Text(
+              'live',
+              style: AppTextStyles.mono(fontSize: 10, color: AppColors.amber),
+            ),
         ],
       ),
     );
