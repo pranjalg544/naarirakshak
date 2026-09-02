@@ -56,7 +56,6 @@ class AudioDetectionService {
 
   // Consecutive detection counter for false-positive reduction
   int _consecutiveDetections = 0;
-  static const int _requiredConsecutive = 2; // Need 2 consecutive windows above threshold
 
   // ── Public streams ─────────────────────────────────────────────────
   final _snapshots = StreamController<AudioDetectionSnapshot>.broadcast();
@@ -67,13 +66,17 @@ class AudioDetectionService {
   DetectionState get state => _state;
   set sensitivity(SensitivityLevel level) => _sensitivity = level;
 
-  // ── Thresholds ─────────────────────────────────────────────────────
-  // These map to confidence levels at which the model triggers SOS.
-  // The model's precision at 0.5 threshold is 85%, so medium (0.75) is safe.
+  // ── Thresholds & Consecutive rules ──────────────────────────────────
   static const _thresholds = <SensitivityLevel, double>{
-    SensitivityLevel.low: 0.90,    // Very conservative — minimal false positives
-    SensitivityLevel.medium: 0.75, // Balanced — good for daily commutes
-    SensitivityLevel.high: 0.60,   // Aggressive — catches more, may false-trigger
+    SensitivityLevel.low: 0.85,    // Conservative — minimal false positives
+    SensitivityLevel.medium: 0.60, // Balanced — responsive to screams
+    SensitivityLevel.high: 0.50,   // High — fast trigger
+  };
+
+  static const _requiredConsecutiveMap = <SensitivityLevel, int>{
+    SensitivityLevel.low: 2,
+    SensitivityLevel.medium: 1,
+    SensitivityLevel.high: 1,
   };
 
   // ── Lifecycle ──────────────────────────────────────────────────────
@@ -203,10 +206,10 @@ class AudioDetectionService {
       if (abs > maxAbs) maxAbs = abs;
     }
     final List<double> normalized;
-    if (maxAbs > 1e-6) {
+    if (maxAbs >= 0.025) {
       normalized = samples.map((s) => s / maxAbs).toList();
     } else {
-      // Silence — skip inference
+      // Quiet background noise / silence — skip inference to avoid scaling up noise
       _state = DetectionState.listening;
       _consecutiveDetections = 0;
       _emit(confidence: 0.0);
@@ -223,10 +226,11 @@ class AudioDetectionService {
       _interpreter!.run(input, output);
       final double screamProbability = output[0][0];
       final threshold = _thresholds[_sensitivity]!;
+      final requiredConsecutive = _requiredConsecutiveMap[_sensitivity]!;
 
       if (screamProbability >= threshold) {
         _consecutiveDetections++;
-        if (_consecutiveDetections >= _requiredConsecutive) {
+        if (_consecutiveDetections >= requiredConsecutive) {
           // Confirmed distress — trigger SOS pipeline
           _state = DetectionState.triggered;
           _triggers.add(screamProbability);
@@ -242,7 +246,7 @@ class AudioDetectionService {
           debugPrint(
             'AudioDetection: 🔶 Elevated '
             '(confidence: ${(screamProbability * 100).toStringAsFixed(1)}%, '
-            'need ${_requiredConsecutive - _consecutiveDetections} more)',
+            'need ${requiredConsecutive - _consecutiveDetections} more)',
           );
         }
       } else if (screamProbability >= threshold * 0.7) {

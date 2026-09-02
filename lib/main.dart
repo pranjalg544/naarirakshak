@@ -65,6 +65,7 @@ class _SafetyShellState extends State<SafetyShell> {
   String _userName = '';
 
   // Destination chosen by the user before commute
+  bool _isCommuting = false;
   String _destinationName = '';
   LatLng? _destinationLatLng;
 
@@ -82,7 +83,8 @@ class _SafetyShellState extends State<SafetyShell> {
   void initState() {
     super.initState();
     _distressSub = _audioService.onDistressDetected.listen((confidence) {
-      if (_audioEnabled && mounted) {
+      // ONLY trigger automatic SOS / distress notifications when an active commute session is running!
+      if (_isCommuting && _audioEnabled && mounted) {
         setState(() {
           _triggerConfidence = confidence;
           _automaticSos = true;
@@ -116,11 +118,6 @@ class _SafetyShellState extends State<SafetyShell> {
         _screen != AppScreen.autoSosCountdown) {
       _previousScreen = _screen;
     }
-    if (screen == AppScreen.pod && _audioEnabled) {
-      _audioService.startListening();
-    } else if (_screen == AppScreen.pod && screen != AppScreen.autoSosCountdown) {
-      _audioService.stopListening();
-    }
     setState(() => _screen = screen);
   }
 
@@ -149,13 +146,20 @@ class _SafetyShellState extends State<SafetyShell> {
     );
   }
 
-  /// Called when user selects a destination on the home screen.
+  /// Called when user selects a destination on the home screen to start commuting.
   Future<void> _startCommuteWithDestination(String name, LatLng latLng) async {
     setState(() {
+      _isCommuting = true;
       _destinationName = name;
       _destinationLatLng = latLng;
       _commuteTrackingToken = null;
     });
+
+    // Start AI scream detection ONLY when commute begins
+    if (_audioEnabled) {
+      _audioService.startListening();
+    }
+
     _goTo(AppScreen.pod);
 
     try {
@@ -245,6 +249,7 @@ class _SafetyShellState extends State<SafetyShell> {
       onStartCommute: _startCommuteWithDestination,
     ),
     AppScreen.pod => PodView(
+      isCommuting: _isCommuting,
       audioService: _audioService,
       audioEnabled: _audioEnabled,
       destinationName: _destinationName,
@@ -253,8 +258,10 @@ class _SafetyShellState extends State<SafetyShell> {
       onReached: () {
         _audioService.stopListening();
         setState(() {
+          _isCommuting = false;
           _destinationName = '';
           _destinationLatLng = null;
+          _commuteTrackingToken = null;
         });
         _goTo(AppScreen.home);
       },
@@ -264,7 +271,14 @@ class _SafetyShellState extends State<SafetyShell> {
     ),
     AppScreen.settings => SettingsView(
       audioEnabled: _audioEnabled,
-      onAudioToggle: (val) => setState(() => _audioEnabled = val),
+      onAudioToggle: (val) {
+        setState(() => _audioEnabled = val);
+        if (!val) {
+          _audioService.stopListening();
+        } else if (_isCommuting) {
+          _audioService.startListening();
+        }
+      },
       audioService: _audioService,
       onNavigateContacts: () => _goTo(AppScreen.contacts),
     ),
@@ -975,6 +989,7 @@ class _DestinationPickerSheetState extends State<_DestinationPickerSheet> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 class PodView extends StatefulWidget {
+  final bool isCommuting;
   final VoidCallback onReached;
   final AudioDetectionService audioService;
   final bool audioEnabled;
@@ -984,6 +999,7 @@ class PodView extends StatefulWidget {
 
   const PodView({
     super.key,
+    required this.isCommuting,
     required this.onReached,
     required this.audioService,
     required this.audioEnabled,
@@ -1053,7 +1069,7 @@ class _PodViewState extends State<PodView> {
   }
 
   String _elapsedTime() {
-    if (_commuteStartTime == null) return '0 min';
+    if (!widget.isCommuting || _commuteStartTime == null) return 'Not commuting';
     final diff = DateTime.now().difference(_commuteStartTime!);
     final mins = diff.inMinutes;
     if (mins < 60) return '$mins min elapsed';
@@ -1075,8 +1091,11 @@ class _PodViewState extends State<PodView> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Commute active', style: AppTextStyles.display(fontSize: 19)),
-              if (widget.audioEnabled)
+              Text(
+                widget.isCommuting ? 'Commute active' : 'No active commute',
+                style: AppTextStyles.display(fontSize: 19),
+              ),
+              if (widget.audioEnabled && widget.isCommuting)
                 StreamBuilder<AudioDetectionSnapshot>(
                   stream: widget.audioService.snapshots,
                   builder: (context, snapshot) {
