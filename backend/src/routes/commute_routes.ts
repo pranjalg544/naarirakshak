@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { authenticateJwt, AuthenticatedRequest } from '../middlewares/auth_middleware';
-import { startCommuteAndMatchPod, checkInSafe } from '../services/pod_service';
+import { startCommuteAndMatchPod, checkInSafe, getPodMembers } from '../services/pod_service';
 
 const router = Router();
 
@@ -22,6 +22,19 @@ router.post('/start', authenticateJwt, async (req: AuthenticatedRequest, res) =>
     return res.status(201).json({ success: true, ...result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET /api/v1/commute/:commuteId/members
+// Returns all pod members for the given commute session (authenticated user must be a member).
+router.get('/:commuteId/members', authenticateJwt, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { commuteId } = req.params;
+    const result = await getPodMembers(commuteId, req.user!.id);
+    return res.json({ success: true, ...result });
+  } catch (error: any) {
+    const status = error.message.startsWith('Access denied') ? 403 : 500;
+    return res.status(status).json({ success: false, message: error.message });
   }
 });
 
