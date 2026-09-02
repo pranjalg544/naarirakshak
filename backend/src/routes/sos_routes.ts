@@ -22,6 +22,15 @@ router.post('/trigger', authenticateJwt, async (req: AuthenticatedRequest, res) 
   }
 });
 
+// Public TwiML XML endpoint consumed by Twilio Voice Calls
+router.get('/twiml/emergency-call', (req, res) => {
+  res.type('text/xml');
+  res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Emergency alert from NaariRakshak safety system. Your contact has triggered an emergency SOS alert. Please check your tracking link immediately.</Say>
+</Response>`);
+});
+
 // Public read-only endpoint used by emergency contacts before the socket stream starts.
 router.get('/track/:token/latest', async (req, res) => {
   try {

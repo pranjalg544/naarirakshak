@@ -271,11 +271,8 @@ class _SafetyShellState extends State<SafetyShell> {
           _isCommuting = false;
           _destinationName = '';
           _destinationLatLng = null;
-<<<<<<< HEAD
           _commuteTrackingToken = null;
-=======
           _commuteId = null;
->>>>>>> 5dd8bd7d0c873f52c860d8625053a738d98a362c
         });
         _goTo(AppScreen.home);
       },
@@ -1565,6 +1562,10 @@ class _SosActiveViewState extends State<SosActiveView> {
   Duration _elapsed = Duration.zero;
   final _startTime = DateTime.now();
 
+  int _smsSent = 0;
+  int _contactsFound = 0;
+  String? _trialWarning;
+
   @override
   void initState() {
     super.initState();
@@ -1597,6 +1598,14 @@ class _SosActiveViewState extends State<SosActiveView> {
 
       _incidentId = res.incidentId;
       _trackingToken = res.trackingToken;
+
+      if (mounted) {
+        setState(() {
+          _smsSent = res.smsSent;
+          _contactsFound = res.contactsFound;
+          _trialWarning = res.trialWarning;
+        });
+      }
 
       if (kDebugMode) {
         print('SOS alert dispatched. Tracking location from $_currentLocation');
@@ -1681,6 +1690,32 @@ class _SosActiveViewState extends State<SosActiveView> {
               _formatElapsed(),
               style: AppTextStyles.mono(fontSize: 11, color: AppColors.coral),
             ),
+            if (_trialWarning != null) ...[
+              const SizedBox(height: 12),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.amber.shade50,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.amber.shade400),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline, color: Colors.amber, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _trialWarning!,
+                          style: AppTextStyles.body(fontSize: 12, color: Colors.brown.shade800),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -1698,11 +1733,18 @@ class _SosActiveViewState extends State<SosActiveView> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: _Panel(
                 child: Column(
-                  children: const [
-                    _AlertRow('Pod notified', true),
-                    _AlertRow('Emergency contacts notified', true),
-                    _AlertRow('Live location sharing', true),
-                    _AlertRow('Control room (112) pinged', true),
+                  children: [
+                    const _AlertRow('Pod notified', true),
+                    _AlertRow(
+                      _contactsFound > 0
+                          ? (_smsSent > 0
+                              ? 'Emergency contacts notified ($_smsSent/$_contactsFound SMS)'
+                              : 'Emergency contacts queued ($_contactsFound contacts)')
+                          : 'Emergency contacts notified',
+                      true,
+                    ),
+                    const _AlertRow('Live location sharing', true),
+                    const _AlertRow('Control room (112) pinged', true),
                   ],
                 ),
               ),

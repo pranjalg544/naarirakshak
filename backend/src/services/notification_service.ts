@@ -9,11 +9,11 @@ function getTwilioClient() {
   if (!accountSid || accountSid.includes('xxxxx') || accountSid === 'ACxxxxx') {
     return null;
   }
-  if (apiKey && apiSecret && accountSid) {
-    return twilio(apiKey, apiSecret, { accountSid });
-  }
   if (accountSid && authToken) {
     return twilio(accountSid, authToken);
+  }
+  if (apiKey && apiSecret && accountSid) {
+    return twilio(apiKey, apiSecret, { accountSid });
   }
   return null;
 }
@@ -39,9 +39,11 @@ async function sendSms(
   to: string,
   body: string,
   label: string
-): Promise<{ externalMsgId: string; status: string }> {
+): Promise<{ externalMsgId: string; status: string; errorCode?: number; errorMessage?: string }> {
   let externalMsgId = `SM_mock_${Date.now()}`;
   let status = 'DELIVERED';
+  let errorCode: number | undefined;
+  let errorMessage: string | undefined;
 
   if (client && fromPhone) {
     try {
@@ -50,21 +52,23 @@ async function sendSms(
       status = normalizeStatus(msg.status.toUpperCase());
       console.log(`📱 [TWILIO SMS ${status}] SID: ${msg.sid} → ${label} (${to})`);
     } catch (err: any) {
-      console.error(`❌ [TWILIO SMS ERROR] Failed to send SMS to ${label} (${to}):`, err?.message || err);
+      status = 'FAILED';
+      errorCode = err?.code;
+      errorMessage = err?.message || String(err);
+      console.error(`❌ [TWILIO SMS ERROR ${errorCode || ''}] Failed to send SMS to ${label} (${to}):`, errorMessage);
       if (err?.code === 572006) {
-        console.warn(`👉 [TWILIO TRIAL RESTRICTION]: Twilio trial +91 numbers block custom SMS body text (DLT requirement). Upgrade Twilio account or use a US (+1) Twilio number.`);
+        console.warn(`👉 [TWILIO TRIAL RESTRICTION]: Twilio trial +91 numbers block custom SMS body text (TRAI DLT requirement). Upgrade Twilio account or add number to Twilio Console.`);
       } else if (err?.code === 21608 || err?.code === 573003) {
-        console.warn(`👉 [UNVERIFIED NUMBER]: In Twilio Trial accounts, SMS can only be sent to Verified Caller IDs registered in your Twilio Console.`);
+        console.warn(`👉 [UNVERIFIED NUMBER]: In Twilio Trial accounts, SMS can only be sent to Verified Caller IDs registered in your Twilio Console (https://www.twilio.com/console/phone-numbers/verified).`);
       } else if (err?.code === 21408) {
         console.warn(`👉 [GEO PERMISSION ERROR]: Enable SMS Geo Permissions for India (+91) in Twilio Console → Messaging → Settings → Geo Permissions.`);
       }
-      status = 'FAILED';
     }
   } else {
     console.log(`📱 [SIMULATED SMS DELIVERED] To ${label} (${to}): "${body}"`);
   }
 
-  return { externalMsgId, status };
+  return { externalMsgId, status, errorCode, errorMessage };
 }
 
 export async function dispatchEmergencyAlerts(
@@ -87,6 +91,7 @@ export async function dispatchEmergencyAlerts(
   const client = getTwilioClient();
   const fromPhone = process.env.TWILIO_PHONE_NUMBER;
   let smsSent = 0;
+  const twilioErrors: Array<{ recipient: string; code?: number; message?: string }> = [];
 
   // 2. Fetch emergency contacts
   const contactsRes = await query(
@@ -107,8 +112,12 @@ export async function dispatchEmergencyAlerts(
   for (const contact of contactsRes.rows) {
     const recipient = normalizePhone(contact.phone_number);
 
-    const { externalMsgId, status } = await sendSms(client, fromPhone, recipient, alertMessage, contact.contact_name);
-    if (status !== 'FAILED') smsSent += 1;
+    const { externalMsgId, status, errorCode, errorMessage } = await sendSms(client, fromPhone, recipient, alertMessage, contact.contact_name);
+    if (status !== 'FAILED') {
+      smsSent += 1;
+    } else if (errorCode || errorMessage) {
+      twilioErrors.push({ recipient, code: errorCode, message: errorMessage });
+    }
 
     await query(
       `INSERT INTO incident_dispatches (incident_id, channel, recipient, dispatch_status, external_message_id)
@@ -119,28 +128,28 @@ export async function dispatchEmergencyAlerts(
     // Voice call to primary emergency contact
     if (client && fromPhone && contact.is_primary) {
       try {
-        await client.calls.create({
-          twiml: `<Response><Say voice="alice">Emergency alert. ${userName} needs immediate assistance. Please check your SMS for the live tracking link.</Say></Response>`,
+        const twimlUrl = publicBaseUrl.includes('localhost')
+          ? 'http://demo.twilio.com/docs/voice.xml'
+          : `${publicBaseUrl}/api/v1/sos/twiml/emergency-call`;
+
+        const voiceCall = await client.calls.create({
+          url: twimlUrl,
           from: fromPhone,
           to: recipient,
         });
-        console.log(`📞 [TWILIO CALL DISPATCHED] Calling primary contact ${contact.contact_name} (${recipient})`);
+        console.log(`📞 [TWILIO CALL DISPATCHED] Calling primary contact ${contact.contact_name} (${recipient}) | SID: ${voiceCall.sid}`);
       } catch (err: any) {
-        console.error(`❌ [TWILIO VOICE ERROR] Failed to call primary contact ${contact.contact_name} (${recipient}):`, err?.message || err);
-        if (err?.code === 573003 || err?.code === 21215) {
+        console.error(`❌ [TWILIO VOICE ERROR ${err?.code || ''}] Failed to call primary contact ${contact.contact_name} (${recipient}):`, err?.message || err);
+        if (err?.code === 573003 || err?.code === 21215 || err?.code === 21608) {
           console.warn(`👉 [UNVERIFIED VOICE RECIPIENT]: Register ${recipient} in Twilio Console → Verified Caller IDs to allow trial calls.`);
         }
       }
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────────
-  // BUG FIX 2 & 3: Notify pod co-members when any member triggers SOS.
-  // Find the user's current active pod and send SMS to every other member.
-  // ─────────────────────────────────────────────────────────────────────────────
+  // 4. Notify pod co-members when any member triggers SOS.
   let podMembersNotified = 0;
   try {
-    // Find the user's active pod via their most recent active commute session
     const podRes = await query(
       `SELECT pm.pod_id
        FROM pod_memberships pm
@@ -156,7 +165,6 @@ export async function dispatchEmergencyAlerts(
       const podId = podRes.rows[0].pod_id;
       console.log(`🔍 SOS user is in pod ${podId}. Notifying co-members...`);
 
-      // Get all other members in the same pod (excluding the SOS user themselves)
       const membersRes = await query(
         `SELECT u.full_name, u.phone
          FROM pod_memberships pm
@@ -175,9 +183,13 @@ export async function dispatchEmergencyAlerts(
           continue;
         }
         const memberPhone = normalizePhone(member.phone);
-        const { externalMsgId, status } = await sendSms(client, fromPhone, memberPhone, podAlertMessage, `Pod member: ${member.full_name}`);
+        const { externalMsgId, status, errorCode, errorMessage } = await sendSms(client, fromPhone, memberPhone, podAlertMessage, `Pod member: ${member.full_name}`);
 
-        if (status !== 'FAILED') podMembersNotified += 1;
+        if (status !== 'FAILED') {
+          podMembersNotified += 1;
+        } else if (errorCode || errorMessage) {
+          twilioErrors.push({ recipient: memberPhone, code: errorCode, message: errorMessage });
+        }
 
         await query(
           `INSERT INTO incident_dispatches (incident_id, channel, recipient, dispatch_status, external_message_id)
@@ -191,11 +203,10 @@ export async function dispatchEmergencyAlerts(
       console.log(`ℹ️ User ${userId} has no active pod — skipping pod member notifications.`);
     }
   } catch (podErr: any) {
-    // Non-fatal: emergency contact SMS already sent; just log the pod error
     console.error(`⚠️ [POD NOTIFICATION ERROR] Failed to notify pod members:`, podErr?.message || podErr);
   }
 
-  // 4. Log 112 Police Control Room Ping
+  // 5. Log 112 Police Control Room Ping
   console.log(`🚨 [112 POLICE CONTROL ROOM] Pinged with location: (${lat}, ${lng}) | Tracking URL: ${trackingUrl}`);
   await query(
     `INSERT INTO incident_dispatches (incident_id, channel, recipient, dispatch_status, external_message_id)
@@ -203,5 +214,26 @@ export async function dispatchEmergencyAlerts(
     [incidentId, `112_ticket_${Date.now()}`]
   );
 
-  return { contactsFound: contactsRes.rows.length, smsSent, podMembersNotified };
+  let trialWarning: string | null = null;
+  if (client && contactsRes.rows.length > 0 && smsSent === 0) {
+    const has572006 = twilioErrors.some(e => e.code === 572006);
+    const hasUnverified = twilioErrors.some(e => e.code === 21608 || e.code === 573003);
+    if (hasUnverified) {
+      trialWarning = "Twilio Trial Restriction: Recipient numbers must be registered under Verified Caller IDs in Twilio Console.";
+    } else if (has572006) {
+      trialWarning = "Twilio Trial Restriction: Custom SMS body to +91 numbers requires Twilio DLT template or upgraded account.";
+    } else {
+      trialWarning = "Twilio SMS dispatch failed. Check Twilio Console logs.";
+    }
+  }
+
+  return {
+    contactsFound: contactsRes.rows.length,
+    smsSent,
+    podMembersNotified,
+    isTwilioConfigured: Boolean(client && fromPhone),
+    twilioErrors,
+    trialWarning,
+  };
 }
+

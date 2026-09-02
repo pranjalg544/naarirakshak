@@ -4,7 +4,8 @@ import jwt from 'jsonwebtoken';
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
-    phone: string;
+    phone?: string;
+    email?: string;
   };
 }
 
@@ -33,21 +34,14 @@ export function authenticateJwt(
     const decoded = jwt.verify(
       token,
       process.env.JWT_SECRET || 'naarirakshak_super_secret_jwt_key_2026_safe'
-    ) as { id: string; phone: string };
+    ) as { id: string; phone?: string; email?: string };
 
     req.user = decoded;
     next();
   } catch (error) {
-    if (process.env.NODE_ENV === 'development') {
-      req.user = {
-        id: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
-        phone: '+919876543210',
-      };
-      return next();
-    }
     return res.status(403).json({
       success: false,
-      message: 'Invalid or expired token.',
+      message: 'Invalid or expired token. Please sign in again.',
     });
   }
 }
