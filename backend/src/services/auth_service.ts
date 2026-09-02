@@ -1,19 +1,12 @@
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { query } from '../config/db';
 
 export async function requestOtp(phone: string) {
-  // Check if user exists, or create a new user profile
-  let res = await query('SELECT id, phone, full_name FROM users WHERE phone = $1', [phone]);
+  const res = await query('SELECT id, phone, full_name FROM users WHERE phone = $1', [phone]);
 
   if (res.rows.length === 0) {
-    const defaultName = `User_${phone.slice(-4)}`;
-    res = await query(
-      `INSERT INTO users (phone, full_name, is_verified) 
-       VALUES ($1, $2, TRUE) 
-       RETURNING id, phone, full_name`,
-      [phone, defaultName]
-    );
+    throw new Error('Account not found with this phone number. Please create an account / sign up first.');
   }
 
   // Generate mock 6-digit OTP for testing (123456)

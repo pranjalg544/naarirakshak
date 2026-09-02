@@ -456,10 +456,40 @@ class _AuthViewState extends State<AuthView> {
       } catch (e) {
         if (mounted) {
           setState(() => _isLoading = false);
-          final fallbackName = _isSignUp
-              ? (fullName.isNotEmpty ? fullName : 'User')
-              : (email.contains('@') ? email.split('@').first : 'User');
-          widget.onAuthenticated(fallbackName);
+          final errorMsg = e.toString().replaceAll('Exception: ', '');
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.error_outline, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      errorMsg,
+                      style: const TextStyle(color: Colors.white, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: AppColors.coral,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 4),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          );
+
+          // If signing in and account not found, toggle to Sign Up mode
+          if (!_isSignUp &&
+              (errorMsg.toLowerCase().contains('not found') ||
+                  errorMsg.toLowerCase().contains('create an account') ||
+                  errorMsg.toLowerCase().contains('sign up'))) {
+            setState(() => _isSignUp = true);
+          } else if (_isSignUp && errorMsg.toLowerCase().contains('already exists')) {
+            setState(() => _isSignUp = false);
+          }
         }
       }
     }
