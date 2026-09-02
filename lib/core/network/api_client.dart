@@ -1,8 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 
-import 'package:flutter/foundation.dart';
-
 class ApiClient {
   static String? customBaseUrl;
   
@@ -10,9 +8,7 @@ class ApiClient {
     if (customBaseUrl != null && customBaseUrl!.isNotEmpty) {
       return customBaseUrl!;
     }
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://10.0.2.2:3000/api/v1';
-    }
+    // Production Railway cloud backend (accessible on physical phones and emulators)
     return 'https://natural-optimism-production-a0cc.up.railway.app/api/v1';
   }
 

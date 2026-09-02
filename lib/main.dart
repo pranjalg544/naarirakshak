@@ -21,10 +21,21 @@ import 'services/auth_api_service.dart';
 import 'services/contacts_api_service.dart';
 import 'services/commute_api_service.dart';
 import 'services/location_service.dart';
+import 'core/network/api_client.dart';
 import 'services/sos_api_service.dart';
 import 'services/live_location_socket_service.dart';
 
-void main() => runApp(const NariRakshakApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final customUrl = prefs.getString('custom_backend_url');
+    if (customUrl != null && customUrl.isNotEmpty) {
+      ApiClient.customBaseUrl = customUrl;
+    }
+  } catch (_) {}
+  runApp(const NariRakshakApp());
+}
 
 class NariRakshakApp extends StatelessWidget {
   const NariRakshakApp({super.key});
@@ -2560,6 +2571,39 @@ class _SettingsViewState extends State<SettingsView> {
               ),
             ),
           ),
+          const SizedBox(height: 14),
+          // Server URL setting
+          _Panel(
+            child: InkWell(
+              onTap: () => _showServerDialog(),
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    const Icon(Icons.cloud_outlined, size: 17, color: AppColors.amber),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Safety server URL', style: AppTextStyles.body(fontSize: 13)),
+                          const SizedBox(height: 2),
+                          Text(
+                            ApiClient.customBaseUrl ?? 'Live Cloud (Railway)',
+                            style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.edit_outlined, size: 16, color: AppColors.faint),
+                  ],
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -2567,6 +2611,67 @@ class _SettingsViewState extends State<SettingsView> {
               'Audio is processed on your device. Nothing is uploaded unless an SOS is triggered.',
               style: AppTextStyles.body(fontSize: 10.5, color: AppColors.faint),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showServerDialog() {
+    final controller = TextEditingController(text: ApiClient.customBaseUrl ?? '');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: const Text('Safety Server Endpoint', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Leave empty to use the live Railway Cloud server, or enter your local IP (e.g. http://10.130.219.73:3000/api/v1):',
+              style: TextStyle(fontSize: 12, color: AppColors.muted),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                hintText: 'https://.../api/v1',
+                hintStyle: const TextStyle(fontSize: 12),
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              ),
+              style: const TextStyle(fontSize: 13),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.remove('custom_backend_url');
+              ApiClient.customBaseUrl = null;
+              if (mounted) setState(() {});
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Reset to Cloud', style: TextStyle(color: AppColors.coral, fontSize: 13)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.amber),
+            onPressed: () async {
+              final text = controller.text.trim();
+              final prefs = await SharedPreferences.getInstance();
+              if (text.isNotEmpty) {
+                await prefs.setString('custom_backend_url', text);
+                ApiClient.customBaseUrl = text;
+              } else {
+                await prefs.remove('custom_backend_url');
+                ApiClient.customBaseUrl = null;
+              }
+              if (mounted) setState(() {});
+              if (ctx.mounted) Navigator.pop(ctx);
+            },
+            child: const Text('Save', style: TextStyle(color: Colors.white, fontSize: 13)),
           ),
         ],
       ),
