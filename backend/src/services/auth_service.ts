@@ -1,10 +1,11 @@
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import { query } from '../config/db';
 
 export async function requestOtp(phone: string) {
   // Check if user exists, or create a new user profile
   let res = await query('SELECT id, phone, full_name FROM users WHERE phone = $1', [phone]);
-  
+
   if (res.rows.length === 0) {
     const defaultName = `User_${phone.slice(-4)}`;
     res = await query(
@@ -47,17 +48,19 @@ export async function verifyOtp(phone: string, otp: string) {
   };
 }
 
-export async function signUpUser(fullName: string, email: string, password_hash: string) {
+export async function signUpUser(fullName: string, email: string, password: string) {
   const existing = await query('SELECT id FROM users WHERE LOWER(email) = LOWER($1)', [email]);
   if (existing.rows.length > 0) {
     throw new Error('User with this email already exists. Please sign in.');
   }
 
+  const passwordHash = await bcrypt.hash(password, 10);
+
   const res = await query(
     `INSERT INTO users (full_name, email, password_hash, is_verified)
      VALUES ($1, $2, $3, TRUE)
      RETURNING id, full_name, email, phone`,
-    [fullName, email.toLowerCase(), password_hash]
+    [fullName, email.toLowerCase(), passwordHash]
   );
 
   const user = res.rows[0];
@@ -70,7 +73,7 @@ export async function signUpUser(fullName: string, email: string, password_hash:
   return { token, user };
 }
 
-export async function signInUser(email: string, password_hash: string) {
+export async function signInUser(email: string, password: string) {
   const res = await query(
     'SELECT id, full_name, email, phone, password_hash FROM users WHERE LOWER(email) = LOWER($1)',
     [email]
@@ -81,7 +84,12 @@ export async function signInUser(email: string, password_hash: string) {
   }
 
   const user = res.rows[0];
-  if (user.password_hash && user.password_hash !== password_hash) {
+  if (!user.password_hash) {
+    throw new Error('Invalid credentials. Please try again.');
+  }
+
+  const isPasswordValid = await bcrypt.compare(password, user.password_hash);
+  if (!isPasswordValid) {
     throw new Error('Incorrect password. Please try again.');
   }
 
