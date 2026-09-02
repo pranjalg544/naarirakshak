@@ -56,6 +56,7 @@ The NaariRakshak platform is divided into three primary operational tiers:
 - **Hardware Telemetry**: `geolocator` 13.0.4, `sensors_plus` 6.1.2
 - **Audio Capture & Inference**: `record` 5.1.2, `tflite_flutter` 0.10.4, custom JavaScript fallback for Web (`tflite_web.dart`)
 - **Real-Time Communication**: `socket_io_client` 3.0.1, `http` 1.2.2, `url_launcher` 6.3.1
+- **Deployment Formats**: Standalone Android Release APK (`app-release.apk`), Split-ABI APKs (`arm64-v8a`, `armeabi-v7a`, `x86_64`), Web, Windows Desktop
 
 ### Server Layer
 - **Runtime Environment**: Node.js 18+ LTS
@@ -456,7 +457,41 @@ naarirakshak/
 
 ---
 
-### 7.4. Machine Learning Model Retraining (Optional)
+### 7.4. Android Application Package (APK) Generation
+
+A standalone Android Application Package (APK) is available for direct installation and hardware testing on physical Android devices.
+
+#### 1. Generating Release APK
+To compile a standalone release APK bundling the optimized TensorFlow Lite model binary and native ARM libraries:
+
+```bash
+# Standard universal release APK
+flutter build apk --release
+
+# Architecture-specific split APKs (recommended for reduced binary footprint)
+flutter build apk --split-per-abi --release
+```
+
+#### 2. Build Output Artifacts
+The compiled binary artifacts are generated in the following output directory:
+- Universal Release Binary: `build/app/outputs/flutter-apk/app-release.apk`
+- Architecture-Specific Binaries:
+  - ARM 64-bit: `build/app/outputs/flutter-apk/app-arm64-v8a-release.apk`
+  - ARM 32-bit: `build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk`
+  - x86 64-bit: `build/app/outputs/flutter-apk/app-x86_64-release.apk`
+
+#### 3. Installing on Android Devices
+Connect the Android device via USB with USB Debugging enabled, and execute:
+
+```bash
+adb install -r build/app/outputs/flutter-apk/app-release.apk
+```
+
+Alternatively, transfer `app-release.apk` directly to the device storage and execute the package installer.
+
+---
+
+### 7.5. Machine Learning Model Retraining (Optional)
 
 To retrain the scream detection model on updated audio corpuses:
 
