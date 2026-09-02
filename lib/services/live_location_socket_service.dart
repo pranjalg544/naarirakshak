@@ -14,9 +14,7 @@ class LiveLocationSocketService {
 
   void connect({String? serverUrl}) {
     final targetUrl = serverUrl ??
-        (!kIsWeb && defaultTargetPlatform == TargetPlatform.android
-            ? 'http://10.0.2.2:3000'
-            : 'http://localhost:3000');
+        'https://natural-optimism-production-a0cc.up.railway.app';
 
     if (_socket != null && _isConnected) return;
 
